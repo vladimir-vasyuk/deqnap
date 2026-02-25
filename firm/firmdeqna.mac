@@ -562,6 +562,11 @@ RXP:
 .ENDC
 ;-----------------------------------------------
 ;
+; Frame with setup data should be processed here
+; 1. Check S-bit, if no - BR 5$
+; 2. Save FIFO pointer, calculate bias, call subroutine
+; 3. Restore FIFO pointer and continue
+;
 5$:	ASH	#2, R5		; Put bits in right position
 	BIC	#^C<ET.REI>, R5	; Clear all except needed bits
 	BIS	R5, R4		; Combine error bits
