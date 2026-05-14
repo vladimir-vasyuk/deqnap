@@ -1,5 +1,5 @@
 //=================================================================================
-// Реализация контроллера Ethernet DENQA на основе процессора М4 (LSI-11M)
+// Реализация контроллера Ethernet DEQNA/DELQA под управлением процессором М4 (LSI-11M)
 // Основной модуль
 //=================================================================================
 module deqnap(
@@ -57,7 +57,6 @@ wire w3_s = 1'b1;       // Sanity timer выключен по умолчанию
 //* Шины данных, управление, индикация
 wire [1:0]	adrmode_rx;	// Мультиплексирование адреса (DMA, proc, ether) канала приема
 wire [1:0]	adrmode_tx;	// Мультиплексирование адреса (DMA, proc, ether) канала передачи
-//wire [15:1] dma_lad;		// Внутренний адрес ПДП/DMA
 wire [15:0]	bdl_dat;		// Данные регистров BDL
 wire [9:0]  etxaddr;		// Регистр адреса блока передачи (память -> ether модуль)
 wire [9:0]  erxaddr;		// Регистр адреса блока приема (ether модуль -> память)
@@ -66,15 +65,13 @@ wire [15:0] mtxdbus;		// Шина данных блока приема (DMA -> �
 wire [15:0]	mrxdat;		// Шина данных блока приема (память -> DMA)
 wire [15:0] erxdbus;		// Шина данных блока приема (ether модуль -> память)
 //
-//wire        mtxwe;
-//wire        erxwe;
 wire			comb_res;	// Сигнал комбинированного сброса
 wire [2:0]	indic;		// Сигналы индикации
 assign deqna_led_o = indic;
 
 //*******************************************************************
 //* Буферная память канала приема
-wire        rxfifo_wena, rxfifo_rena;
+wire        rxfifo_wena, rx_dat_rdy, rx_cnt_rdy;
 rxbuf mrxbuf(
 	.wb_clk_i(lwb_clkp),
    .wb_rst_i(comb_res),
@@ -89,12 +86,14 @@ rxbuf mrxbuf(
 	.dma_dat_o(mrxdat),
    .dma_inca_i(dma_inca),
 	.eth_clk_i(rxclkb),
-//   .eth_rst_i(ereset),
+   .eth_rst_i(ethwbrst),
 	.eth_dat_i(erxdbus),
    .eth_cnt_i(rxcntbf),
 	.eth_dwe_i(erdatwe),
    .eth_cwe_i(ercnfwe),
-   .fifo_ren_o(rxfifo_rena),
+   .eth_ncsr_i(nocsr),
+   .dat_rdy_o(rx_dat_rdy),
+   .cnt_rdy_o(rx_cnt_rdy),
    .fifo_wen_o(rxfifo_wena)
 );
 
@@ -105,43 +104,47 @@ txbuf mtxbuf(
 	.wb_clk_i(lwb_clkp),
    .wb_rst_i(comb_res),
 //	.wb_adr_i(lwb_adr[10:1]),
-//	.wb_dat_i(lwb_out),
+	.wb_dat_i(lwb_out),
 //	.wb_dat_o(ltxb_dat),
-//	.wb_cyc_i(lwb_cyc),
-//	.wb_we_i(lwb_we),
-//	.wb_stb_i(ltxb_stb),
-//	.wb_ack_o(ltxb_ack),
+	.wb_cyc_i(lwb_cyc),
+	.wb_we_i(lwb_we),
+	.wb_stb_i(ltxb_stb),
+	.wb_ack_o(ltxb_ack),
 	.dma_stb_i(dma_txb),
-   .dma_inca_i(dma_inca),
 	.dma_dat_i(mtxdbus),
 	.dma_we_i(ldma_we),
    .eth_inca_i(etxinca),
 	.eth_dat_o(etxdbus),
 	.eth_clk_i(txclkb),
-   .fifo_ren_o(txfifo_rena),
-   .fifo_wen_o(txfifo_wena)
+   .eth_rst_i(ethwbrst),
+   .ren_o(txfifo_rena),
+   .wen_o(txfifo_wena)
 );
 
 //*******************************************************************
 // DMA
 
-// Мультиплексор входных шин данных
-wire			dma_txb, dma_rxb, dma_bdl, dma_inca;
-wire [15:0]	ldibus;
+// Мультиплексор входных данных
+wire			dma_txb;       // Строб выбора буфера канала передачи
+wire        dma_rxb;       // Строб выбора буфера канала приема
+wire        dma_bdl;       // Строб выбора регистров BDL
+wire        dma_inca;      // Сигнал инкремента адреса
+wire [15:0]	ldibus;        // Шины входных данных
 assign ldibus = (dma_bdl ? bdl_dat : 16'o000000)
 				  | (dma_rxb ? mrxdat  : 16'o000000);
 
 // Мультиплексор сигналов ошибка данных
-wire        dma_rerr, dma_werr;
-assign dma_rerr = (dma_rxb ? ~rxfifo_rena : 1'b0);
+wire        dma_rerr;      // Ошибка данных операции чтения
+wire        dma_werr;      // Ошибка данных операции записи
+assign dma_rerr = (dma_rxb ? ~rx_dat_rdy : 1'b0);
 assign dma_werr = (dma_txb ? ~txfifo_wena : 1'b0);
 
-// Сигнад записи по каналу ПДП/DMA
+// Сигнал записи по каналу ПДП/DMA
 wire			ldma_we = dma_ack_i & dma_gnt & ~dma_we_o;
 
 dma dmamod(
-   .clk_i(wb_clkp_i),			// тактовая частота шины
-   .rst_i(comb_res),				// сброс
+   .clk_i(wb_clkp_i),
+   .rst_i(comb_res),
 // Внутренняя шина
 	.wb_adr_i(lwb_adr[3:1]),
 	.wb_dat_i(lwb_out),
@@ -153,9 +156,9 @@ dma dmamod(
 	.wb_ack_o(ldma_ack),
 	.lbdata_i(ldibus),
 	.lbdata_o(mtxdbus),
-	.dma_txb_o(dma_txb),       // стоб выбора буфера канала передачи
-	.dma_rxb_o(dma_rxb),       // стоб выбора буфера канала приема
-	.dma_bdl_o(dma_bdl),       // стоб выбора регистров BDL
+	.dma_txb_o(dma_txb),
+	.dma_rxb_o(dma_rxb),
+	.dma_bdl_o(dma_bdl),
 // Внешняя шина
    .dma_req_o(dma_req),
    .dma_gnt_i(dma_gnt),
@@ -190,6 +193,7 @@ wire [47:0]	mac_data;	// MAC адрес принятого кадра
 wire			cmp_done;	// Операция сравнения завершена
 wire			cmp_res;		// Результат операции сравнения
 wire [1:0]	epms;			// Режим прослушивания/установки
+wire        nocsr;
 
 ether etherm(
    .rst_i(ereset),
@@ -206,6 +210,7 @@ ether etherm(
    .rxclkb_o(rxclkb),
    .txclkb_o(txclkb),
 	.stserrs_o(estse),
+   .enocsr_o(nocsr),
    .e_rxc(e_rxc),
    .e_rxdv(e_rxdv),
    .e_rxer(e_rxer),
@@ -240,11 +245,21 @@ ethreset ethrstm(
    .e_reset_o(ereset)
 );
 
+//************************************************
+// Формированеие сигнала сброса для тактового домена Ethernet из сигнала wb_rst_i
+wire        ethwbrst;
+rst_sync_eth rst_wb_eth(
+   .wb_clk_i(lwb_clkp),
+   .wb_rst_i(comb_res),
+   .eth_clk_i(rxclkb),
+   .eth_rst_o(ethwbrst)
+);
+
 //*******************************************************************
-// Генерация несущей для блока MD
-wire			md_clock;	// MD clock (T=440ns)
-wire			md_evt;		// MD event (T~1.85sec)
-mdc_clk mclk(
+// Генерация несущей для модуля MDINT
+wire			md_clock;	// MDC (T=440ns)
+wire			md_evt;		// Event (T~1.85sec) - периодический запрос состояния
+mdc mdclk(
 	.clk_i(wb_clkp_i),
 	.rst_i(comb_res),
 	.mdcclk_o(md_clock),
@@ -309,10 +324,10 @@ wire [15:0]	lcmp_dat;
 // Модуль формирования сбросов  для процессора
 cpu_reset sysreset (
    .clk_i(lwb_clkp),
-   .rst_i(comb_res),		// вход сброса
-   .dclo_o(dclo),			// dclo - сброс от источника питания
-   .aclo_o(aclo),			// aclo - прерывание по сбою питания
-   .irq50_o(lirq50)		// сигнал интервального таймера 50 Гц
+   .rst_i(comb_res),
+   .dclo_o(dclo),
+   .aclo_o(aclo),
+   .irq50_o(lirq50)
 );
 
 //*******************************************************************
@@ -364,14 +379,14 @@ assign lrom_stb = lwb_stb & lwb_cyc & (lwb_adr[15:12] == 4'b1110);					// ROM 16
 assign lcmp_stb = lwb_stb & lwb_cyc & (lwb_adr[15:4] == 12'b001010000101);			// регистры MAC - 24120 - 24136
 assign lerg_stb = lwb_stb & lwb_cyc & (lwb_adr[15:4] == 12'b001010000100);			// внешние регистры - 24100 - 24116
 assign lrxb_stb = lwb_stb & lwb_cyc & (lwb_adr[15:12] == 4'b0001);					// буфер данных канала приема (10000 - 20000)
-//assign ltxb_stb = lwb_stb & lwb_cyc & (lwb_adr[15:11] == 5'b00100);					// буфер данных канала передачи (20000 - 24000)
+assign ltxb_stb = lwb_stb & lwb_cyc & (lwb_adr[15:11] == 5'b00100);					// буфер данных канала передачи (20000 - 24000)
 assign ldma_stb = lwb_stb & lwb_cyc & (lwb_adr[15:4] == 12'b001010000001);			// регистры ПДП/DMA 24020 - 24036
 assign leth_stb = lwb_stb & lwb_cyc & (lwb_adr[15:5] == 11'b00101000001);			// ethernet регистры 24040 - 24076
 assign lbdl_stb = lwb_stb & lwb_cyc & (lwb_adr[15:4] == 12'b001010000000);			// регистры BDL (24000-24016)
 
 // Сигналы подтверждения - собираются через OR со всех устройств
 //assign lwb_ack	= lfrm_ack | lreg_ack | ldma_ack | lrxb_ack | ltxb_ack | lbdl_ack | lcmp_ack;
-assign lwb_ack	= lfrm_ack | lreg_ack | ldma_ack | lrxb_ack | lbdl_ack | lcmp_ack;
+assign lwb_ack	= lfrm_ack | lreg_ack | ldma_ack | lrxb_ack | lbdl_ack | lcmp_ack | ltxb_ack;
 
 assign lfrm_stb = lprg_stb | lrom_stb;
 assign lreg_stb = lerg_stb | leth_stb;
@@ -409,12 +424,11 @@ bdl bdlm(
 	.wb_dat_i(lwb_out),
 	.wb_cyc_i(lwb_cyc),
 	.wb_we_i(lwb_we),
-	.wb_sel_i(lwb_sel),
+//	.wb_sel_i(lwb_sel),
 	.wb_stb_i(lbdl_stb),
 	.wb_ack_o(lbdl_ack),
 	.dma_stb_i(dma_bdl),
    .dma_inca_i(dma_inca),
-//	.dma_adr_i(dma_lad[3:1]),
 	.dma_dat_i(mtxdbus),
 	.dma_we_i(ldma_we),
 	.bdl_dat_o(bdl_dat)
@@ -455,7 +469,7 @@ extregs eregs(
 	.e_mdval_i(md_val_r),
 	.e_mdctrl_o(md_ctrl),
 	.e_mdstat_i(md_status),
-   .etprdy_i(rxfifo_rena),
+   .etprdy_i(rx_cnt_rdy),
 	.santm_o(santm),
 	.dev_ind_o(indic)
 );
@@ -464,7 +478,7 @@ extregs eregs(
 //* Модуль сравнения MAC адресов
 cmpmac cmpm(
 	.wb_clk_i(lwb_clkp),
-   .rst_i(wb_rst_i),
+   .rst_i(comb_res),
 	.wb_adr_i(lwb_adr[3:1]),
 	.wb_dat_i(lwb_out),
 	.wb_dat_o(lcmp_dat),
@@ -475,6 +489,7 @@ cmpmac cmpm(
 	.wb_ack_o(lcmp_ack),
 	.eth_pms_i(epms),
 	.eth_clk_i(e_rxc),
+   .eth_rst_i(ethwbrst),
 	.eth_macr_i(mac_rdy),
 	.eth_macd_i(mac_data),
 	.cmp_done_o(cmp_done),

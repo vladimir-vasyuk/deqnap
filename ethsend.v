@@ -4,21 +4,22 @@
 // Модуль передачи кадра данных
 //=================================================================================
 module ethsend(
-   input         clk_i,      // Синхросигнал
-   input         clr_i,      // Сигнал сброса
-   input         txena_i,    // Сигнал разрешения передачи
-   input         txdatv_i,   // Сигнал  наличия данных
-   output        txdone_o,   // Сигнал завершения передачи
-   output        txend_o,    // Сигнал достоверности данных
-   output [7:0]  dataout_o,  // Шина выходных данных
-   input  [31:0] crc_i,      // Шина CRC
-   input  [15:0] txbdata_i,  // Шина входных данных
-   output        txinca_o,   // Сигнал инкремента адреса FIFO
-   input  [10:0] txcntb_i,   // Счетчик переданных байтов
-   input         skipb_i,    // Пропуск байта (H-bit of the "Address Descriptor Bits")
-   output        crcen_o,    // Cигнал разрешения вычисления CRC
-   output        crcre_o,    // Cигнал сброса CRC
-   output        errgen_o    // Сигнал общей ошибки (не задействован)
+   input         clk_i,       // Синхросигнал
+   input         clr_i,       // Сигнал сброса
+   input         txena_i,     // Сигнал разрешения передачи
+   input         txdatv_i,    // Сигнал  наличия данных
+   input         nocrc_i,     // Не обрабатывать CRC
+   output        txdone_o,    // Сигнал завершения передачи
+   output        txend_o,     // Сигнал достоверности данных
+   output [7:0]  dataout_o,   // Шина выходных данных
+   input  [31:0] crc_i,       // Шина CRC
+   input  [15:0] txbdata_i,   // Шина входных данных
+   output        txinca_o,    // Сигнал инкремента адреса FIFO
+   input  [10:0] txcntb_i,    // Счетчик переданных байтов
+   input         skipb_i,     // Пропуск байта (H-bit of the "Address Descriptor Bits")
+   output        crcen_o,     // Cигнал разрешения вычисления CRC
+   output        crcre_o,     // Cигнал сброса CRC
+   output        errgen_o     // Сигнал общей ошибки (не задействован)
 );
 
 reg         txdone, txend, txinca, crcen, crcre, txer;
@@ -98,8 +99,13 @@ always@(negedge clk_i, posedge clr_i) begin
             crcre <= 1'b0;                // Убрать сигнал сброса CRC
             if(i == 11'h7FF) begin        // Последний байт данных?
                i <= 11'h0;                // Да - обнулить счетчик ...
-               txinca <= 1'b0;            // ... сброс сигнала инкремента адреса ...
-               tx_state <= SENDCRC;       // ... и на передачу CRC
+               txinca <= 1'b0;            // ... сброс сигнала инкремента адреса
+               if(nocrc_i) begin
+                  tx_state <= TXDELAY;    // На завершение
+                  crcen <= 1'b0;
+               end
+               else
+                  tx_state <= SENDCRC;    // На передачу CRC
             // Передача последнего байта данных
                if(bc == 2'o0) begin
                   dataout[7:0] <= bufdat[7:0];
@@ -127,7 +133,12 @@ always@(negedge clk_i, posedge clr_i) begin
                      else begin
                         txer <= 1'b1;           // FIFO опустошено раньше времени - ошибка, ...
                         txinca <= 1'b0;         // ... сброс сигнала инкремента адреса, ...
-                        tx_state <= SENDCRC;    // ... переход к передаче CRC
+                        if(nocrc_i) begin
+                           tx_state <= TXDELAY; // На завершение
+                           crcen <= 1'b0;
+                        end
+                        else
+                           tx_state <= SENDCRC; // На передачу CRC
                      end
                   end
                endcase

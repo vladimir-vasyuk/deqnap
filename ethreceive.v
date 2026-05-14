@@ -3,12 +3,15 @@
 //---------------------------------------------------------------------------------
 // Модуль приема кадра данных
 //=================================================================================
-module ethreceive(
+module ethreceive #(
+   parameter MAX_SIZE = 2048
+)(
 	input					clk_i,      // Синхросигнал
 	input					clr_i,      // Сигнал сброса
 	input					rxena_i,    // Сигнал разрешения приема
 	input      [7:0]	data_i,     // Шина входных данных
 	input					rxdv_i,     // Сигнал достоверности данных
+   input             nocrc_i,    // Не обрабатывать CRC
 	input					rxer_i,     // Сигнал ошибки
 	input      [31:0] crc_i,      // Шина CRC
 	output     [15:0] rxfrsts_o,  // Статус принятого кадра (ошибки и кол-во байт)
@@ -29,14 +32,15 @@ reg  [47:0]	recmac;			// Принятый MAC адрес
 reg  [7:0]	bufdat;			// Буфер принятых данных
 reg			runt_err;      // Сигнал ошибки размера кадра
 reg			crc_err;       // Сигнал ошибки CRC
+reg         long_err;      // Сигнал превышения размера кадра
 reg  [5:0]	sigwait;			// таймер ожидания
-reg  [1:0]  spfrtyp;       // Код приятого спец. кадра
-reg         cmpbit;        // Результат проверки MAC-адреса
+//reg  [1:0]  spfrtyp;       // Код приятого спец. кадра (ignored by  DEQNA)
+reg         cmpmac;        // Результат проверки MAC-адреса
 reg  [10:0] rxcntb;        // Счетчик принятых байтов
 
 assign macdat_o = recmac;
 assign macrdy_o = ic[2] & ic[1] & ~ic[0];
-assign rxfrsts_o = {spfrtyp[1:0], cmpbit, crc_err, runt_err, rxcntb[10:0]};
+assign rxfrsts_o = {1'b0, cmpmac, long_err, crc_err, runt_err, rxcntb[10:0]};
 
 // Конечный автомат канала приема
 localparam IDLE		= 3'd0;
@@ -57,8 +61,8 @@ always@(negedge clk_i, posedge clr_i) begin
    else begin
       case(rx_state)
          IDLE: begin			// Состояние ожидания
-				crcen_o <= 1'b0;											// Сброс сигнала разрешения вычисления CRC
-				crcre_o <= 1'b1;											// Установка сигнала сброса CRCC
+				crcen_o <= 1'b0;										// Сброс сигнала разрешения вычисления CRC
+				crcre_o <= 1'b1;										// Установка сигнала сброса CRCC
 				datwe_o <= 1'b0;                             // Сброс сигнала разрешения записи данных
             cnfwe_o <= 1'b0;                             // Сброс сигнала разрешения записи флагов
 				ic <= 3'o0;												// Сброс счетчика
@@ -66,9 +70,10 @@ always@(negedge clk_i, posedge clr_i) begin
 				sigwait <= 6'b111111;
 				if(rxdv_i & rxena_i) begin                   // Признак принятых данныхи и сигнал разрешения приема
 					if(data_i[7:0] == 8'h55) begin				// Данные преамбулы (0x55)?
-                  cmpbit <= 1'b0;
+                  cmpmac <= 1'b0;
 						crc_err <= 1'b0;                       // Сброс сигнала ошибки CRC
                   runt_err <= 1'b0;                      // Сброс сигнала ошибки размера кадра
+                  long_err <= 1'b0;                      // Сброс сигнала превышения размера кадра
                   rxcntb <= 11'o0000;                    // Начальное значения счетчика приема
 						rx_state<=SIX_55;								// Переход к приему преамбулы
 					end
@@ -117,8 +122,13 @@ always@(negedge clk_i, posedge clr_i) begin
                   rx_state <= CHK_MAC;                   // ... переход на проверку MAC
 				end
 				else begin
-					if(rxdv_i == 1'b1) begin							// Есть разрешение приема данных?
-						rxcntb <= rxcntb + 1'd1;					// Да - инкремент счетчика принятых данных.
+					if(rxdv_i == 1'b1) begin						// Есть разрешение приема данных?
+                  if(rxcntb < MAX_SIZE)                  // Максимальный размер?
+                     rxcntb <= rxcntb + 1'd1;				// Нет - инкремент счетчика принятых данных.
+                  else begin
+                     long_err <= 1'b1;                   // Да, установить флаг ошибки и ...
+                     rx_state <= CHK_MAC;                // ... прервать прием
+                  end
 						if(ic < 3'd6) begin							// Меньше 6 байт?
 							recmac <= {data_i[7:0], recmac[47:8]};	// Да - формирование MAC адреса назначения, ...
 							ic <= ic + 1'd1;								// ... инкремент счетчика.
@@ -144,17 +154,28 @@ always@(negedge clk_i, posedge clr_i) begin
 				end
 			end
 			RX_LAST: begin
-				case(bc)
-					2'o1: begin                               // Если есть не записанные данные...
-						data_o <= {8'b0,bufdat[7:0]};          // ... записать 
-						datwe_o <= 1'b1;
-						bc <= 2'o0;
-					end
-					2'o0: begin                               // Все данные записаны, ...
-						datwe_o <= 1'b0;                       // ... отключить запись в буфер, и  ...
-						rx_state <= RX_CRC;                    // ... переход на проверку контрольной суммы
-					end
-				endcase
+            if(~rxena_i) begin
+               runt_err <= 1'b1;
+               rx_state <= CHK_MAC;
+            end
+            else begin
+				   case(bc)
+					   2'o1: begin                            // Если есть не записанные данные...
+						   data_o <= {8'b0,bufdat[7:0]};       // ... записать 
+						   datwe_o <= 1'b1;
+						   bc <= 2'o0;
+					   end
+					   2'o0: begin                            // Все данные записаны, ...
+						   datwe_o <= 1'b0;                    // ... отключить запись в буфер
+                     if(nocrc_i) begin
+                        crcen_o  <= 1'b0;
+                        rx_state <= CHK_MAC;
+                     end
+                     else
+                        rx_state <= RX_CRC;
+                  end
+				   endcase
+            end
 			end
 			RX_CRC: begin		// Проверка CRC
 				rx_state <= CHK_MAC;                         // На завершение
@@ -165,13 +186,13 @@ always@(negedge clk_i, posedge clr_i) begin
 			end
 			CHK_MAC: begin                                  // Проверка MAC адреса принятого кадра
 				if(cmpdon_i) begin
-               cmpbit <= cmpres_i;                        // Сохранить результат и ...
+               cmpmac <= cmpres_i;                        // Сохранить результат и ...
                rx_state <= FINISH;                       // ... переход к завершению
 				end
 				else begin                                   // Ждем сигнал завершения проверки
 					sigwait <= sigwait -1'b1;
 					if(|sigwait == 1'b0) begin                // Сигнала завершения проверки нет, ...
-                  cmpbit <= 1'b0;                        // ... установить признак ошибки ...
+                  cmpmac <= 1'b0;                        // ... установить признак ошибки ...
 						rx_state <= FINISH;                    // ... переход к завершению
                end
 				end
@@ -185,6 +206,7 @@ always@(negedge clk_i, posedge clr_i) begin
 	end
 end
 
+/*
 // Обнаружение спец. кадров
 always@(negedge clk_i) begin
    case(rx_state)
@@ -199,5 +221,5 @@ always@(negedge clk_i) begin
       end
    endcase
 end
-
+*/
 endmodule

@@ -17,6 +17,7 @@ module ether(
 	output			rxclkb_o,	// Синхросигнал канала приема (запись в буферную память)
    output         txclkb_o,   // Синхросигнал канала передачи (чтение из буферной памяти)
 	output [4:0]	stserrs_o,  // статус и ошибки приема/передачи
+   output         enocsr_o,
 
 	input				e_rxc,		// Синхросигнал канала приема
 	input				e_rxdv,		// Сигнал готовности данных канала приема
@@ -67,13 +68,14 @@ wire			crs_err;		// Отсутствие несущей
 wire			txdone;		// Передача завершена 
 assign crs_err = (e_rxer & (~e_rxdv))? 1'b1 : 1'b0;
 assign rx_errg = loop? 1'b0 : ( ~md_sts_o[0] | ~md_sts_o[1]);
-assign stserrs_o = {e_crs, txdone, crs_err, tx_errg, rx_errg};
+assign stserrs_o = {e_crs, crs_err, tx_errg, rx_errg, txdone};
 
 //================ Синхронизация ====================//
 wire			loop;				// Сигнал работы петли
 wire			mcast;			// Режим широковещания разрешен (пока не используется)
 wire			txrdyl;			// Сигнал готовности данных передачи
 wire			rx_enable;		// Разрешение приема
+wire        nocrc;         // Не обрабатывать CRC
 
 synchonize synch(
 	.clk_i(e_rxc),
@@ -83,8 +85,10 @@ synchonize synch(
 	.mcast_o(mcast),
 	.prmstp_o(prmstp_o),
 	.txrdy_o(txrdyl),
+   .nocrc_o(nocrc),
 	.loop_o(loop)
 );
+assign enocsr_o = nocrc;
 
 // ===== Gigabit mode - speed=1000 and link=OK ======//
 wire        gbmode;
@@ -138,16 +142,15 @@ assign tx_errg = loop? 1'b0 : (e_txer | ~md_sts_o[0]);
 
 //======== Обработка данных канала передачи ========//
 wire        txclkl;			// Синхросигнал канала передачи с учетом петли
-//wire        txenas;
 assign txclkl	= loop? e_rxc : txclk;
 assign txclkb_o = txclkl;
-//assign txenas = txrdyl & txfifoe_i;
 
 ethsend ethsendm(
    .clk_i(txclkl),
    .clr_i(rst_i),
    .txena_i(txrdyl),
    .txdatv_i(txfifoe_i),
+   .nocrc_i(nocrc),
    .txdone_o(txdone),
    .txend_o(txens),
    .dataout_o(txdb),
@@ -181,6 +184,7 @@ ethreceive ethrcvm(
    .data_i(rxdbl),
    .rxdv_i(rxdvl),
    .rxer_i(rxerl),
+   .nocrc_i(nocrc),
    .rxfrsts_o(rxfrsts_o),
    .data_o(erxdbus_o),
    .datwe_o(erdatwrn_o),
@@ -213,7 +217,7 @@ crc_n crc_rx(
 );
 
 //================ Блок управления =================//
-mdc mdcm(
+mdint mdintm(
    .clk_i(md_clk_i),
    .rst_i(rst_i),
    .evt_i(md_evt_i),
@@ -236,11 +240,12 @@ module synchonize(
 	output			txrdy_o,
 	output			mcast_o,
 	output [1:0]	prmstp_o,
+   output			nocrc_o,
 	output			loop_o
 );
 
 reg  [1:0]	rx_ena_r, iloop_r, ieloop_r, eloop_r, mcast_r;
-reg  [1:0]	skipb_r, setup_r, txrdy_r, promis_r;
+reg  [1:0]	skipb_r, setup_r, txrdy_r, promis_r, nocrc_r;
 wire			int_loop_o, inte_loop_o, ext_loop_o, setup_o;
 assign rx_ena_o = rx_ena_r[1];
 assign int_loop_o = iloop_r[1];
@@ -250,8 +255,9 @@ assign skipb_o = skipb_r[1];
 assign setup_o = setup_r[1];
 assign txrdy_o = txrdy_r[1];
 assign mcast_o = mcast_r[1];
-assign prmstp_o[1] = promis_r[1] | inte_loop_o | setup_o | ext_loop_o | int_loop_o;
+assign prmstp_o[1] = promis_r[1] | inte_loop_o | setup_o | ext_loop_o;
 assign prmstp_o[0] = setup_o;
+assign nocrc_o = nocrc_r[1];
 assign loop_o = int_loop_o | inte_loop_o | setup_o;
 
 always @(posedge clk_i) begin
@@ -262,8 +268,9 @@ always @(posedge clk_i) begin
 	setup_r[0] <= ethmode_i[4]; setup_r[1] <= setup_r[0];
 	skipb_r[0] <= ethmode_i[5]; skipb_r[1] <= skipb_r[0];
 	txrdy_r[0] <= ethmode_i[6]; txrdy_r[1] <= txrdy_r[0];
-	mcast_r[0] <= ethmode_i[8]; mcast_r[1] <= mcast_r[0];
-	promis_r[0] <= ethmode_i[9]; promis_r[1] <= promis_r[0];
+	mcast_r[0] <= ethmode_i[7]; mcast_r[1] <= mcast_r[0];
+	promis_r[0] <= ethmode_i[8]; promis_r[1] <= promis_r[0];
+   nocrc_r[0] <= ethmode_i[9]; nocrc_r[1] <= nocrc_r[0];
 end
 
 endmodule

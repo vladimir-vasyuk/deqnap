@@ -1,17 +1,17 @@
 //=================================================================================
-// Реализация контроллера Ethernet DEQNA/DELQA на основе процессора М4 (LSI-11M)
-// Всевозможные модули памяти
+// DEQNA/DELQA Ethernet controller implementation based on M4 processor (LSI-11M)
+// Various memory modules
 //
 //=================================================================================
-// Модуль регистровой памяти
+// Register file module
 //=================================================================================
 module regf #(parameter NUM=6)
 (
-	input						clk_i,   // тактовая частота
-	input  [NUM/2-1:0]	addr_i,  // адрес
-	input  [15:0]			data_i,  // выходные данные
-	input						we_i,    // разрешение записи
-	output [15:0]			q_o      // выходные данные
+	input						clk_i,   // Clock signal
+	input  [NUM/2-1:0]	addr_i,  // Address
+	input  [15:0]			data_i,  // Input data
+	input						we_i,    // Write enable
+	output [15:0]			q_o      // Output data
 );
 
 reg [15:0]	x[NUM-1:0];
@@ -24,6 +24,85 @@ always @(posedge clk_i) begin
       x[addr_i] <= data_i;
    end
 end
+endmodule
+
+
+//=================================================================================
+// BDL module
+//=================================================================================
+module bdl(
+// Internal bus
+   input          wb_clk_i,   // Bus clock signal
+   input          wb_rst_i,   // Reset
+   input  [2:0]   wb_adr_i,   // Address
+   input  [15:0]  wb_dat_i,   // Input data
+   input          wb_cyc_i,   // Bus cycle start
+   input          wb_we_i,    // Write enable (0 = read)
+//   input  [1:0]   wb_sel_i,   // Byte select for write
+   input          wb_stb_i,   // Bus cycle strobe
+   output         wb_ack_o,   // Device select acknowledge
+// DMA bus
+   input          dma_inca_i, // DMA address increment
+   input  [15:0]  dma_dat_i,  // Input data
+   input          dma_we_i,   // Write enable (0 = read)
+   input          dma_stb_i,  // Strobe
+// Common data output
+	output [15:0]	bdl_dat_o
+);
+
+// Bus exchange control signals
+wire			bus_strobe, bus_write_req; //bus_read_req;
+assign bus_strobe = wb_cyc_i & wb_stb_i & ~wb_ack_o;	// Bus cycle strobe
+//assign bus_read_req = bus_strobe & ~wb_we_i;			// Read request
+assign bus_write_req = bus_strobe & wb_we_i;				// Write request
+
+
+// Acknowledge signal generation
+reg			ack;
+always @(posedge wb_clk_i)
+   if (wb_stb_i & wb_cyc_i)
+		ack <= 1'b1;
+   else
+		ack <= 1'b0;
+assign wb_ack_o = ack & wb_stb_i;
+
+wire [15:0]	bdldin;			// BDL input data
+wire [15:0]	bdldout;			// BDL output data
+wire [2:0]	bdladr;			// BDL address
+wire			bdlwe;			// BDL write signal
+reg  [2:0]  dma_adr;
+
+assign bdlwe = dma_stb_i? dma_we_i : (wb_stb_i? wb_we_i : 1'b0);
+assign bdladr = dma_stb_i? dma_adr : wb_adr_i;
+assign bdldin = dma_stb_i? dma_dat_i : wb_dat_i;
+assign bdl_dat_o = bdldout;
+
+always @(posedge wb_clk_i, posedge wb_rst_i)  begin
+   if(wb_rst_i) begin
+   // Reset
+      dma_adr <= 3'b0;
+   end
+   else  begin
+		if(bus_write_req) begin
+			case (wb_adr_i[2:0])
+            3'b111: // 24016
+               dma_adr <= wb_dat_i[2:0];
+            default: ; // other addresses not used
+         endcase
+      end
+      else if(dma_inca_i & dma_stb_i) begin
+         dma_adr <= dma_adr + 1'b1;
+      end
+   end
+end
+
+regf #(.NUM(6)) bdl(
+   .clk_i(wb_clk_i),
+   .addr_i(bdladr),
+   .data_i(bdldin),
+   .we_i(bdlwe),
+   .q_o(bdldout)
+);
 endmodule
 
 
@@ -58,39 +137,42 @@ endmodule
 
 
 //=================================================================================
-// Модуль RXBUF (FIFO канала приема)
+// RXBUF module (Receive channel FIFO)
 //
 // Read: 
 //    BA (base address) - memory value + incr. address
 //    BA+2              - address value
 //    BA+4              - error & flags + byte counter
-////    BA+6              - address value (write operation) -- read_only
 // Write:
 //    BA+2              - address value
 //=================================================================================
 module rxbuf(
-	input          wb_clk_i,   // тактовая частота шины
-   input          wb_rst_i,   // сброс
-   input  [1:0]   wb_adr_i,	// адрес
-   input  [15:0]  wb_dat_i,   // входные данные
-	output [15:0]  wb_dat_o,   // выходные данные
-	input          wb_cyc_i,   // начало цикла шины
-   input          wb_we_i,    // разрешение записи (0 - чтение)
-	input          wb_stb_i,   // строб цикла шины
-	output         wb_ack_o,   // подтверждение выбора устройства
-// ПДП (DMA)
-	input          dma_stb_i,  // строб
-   input          dma_inca_i, // сигнал инкремента адреса
-	output [15:0]  dma_dat_o,  // выходные данные
-// Ethernet
-   input          eth_clk_i,  // тактовая
-	input	 [15:0]  eth_dat_i,  // входные данные пакета
-   input	 [15:0]  eth_cnt_i,  // входные данные FIFOcntf
-	input          eth_dwe_i,  // разрешение записи данных пакета
-   input          eth_cwe_i,  // разрешение записи флагов
-
-   output         fifo_ren_o, // разрешение чтения FIFO
-   output         fifo_wen_o  // разрешение запись в FIFO
+// Domain WB
+	input          wb_clk_i,   // clock
+   input          wb_rst_i,   // reset
+   input  [1:0]   wb_adr_i,	// module address
+   input  [15:0]  wb_dat_i,   // input data
+	output [15:0]  wb_dat_o,   // output data
+	input          wb_cyc_i,   // cycle signal
+   input          wb_we_i,    // [1]=write, [0]=read
+	input          wb_stb_i,   // strobe  signal
+	output         wb_ack_o,   // acknowledge signal
+// DMA (Domain WB)
+	input          dma_stb_i,  // strobe
+   input          dma_inca_i, // address register increment
+	output [15:0]  dma_dat_o,  // output data
+// Domain Ethernet
+   input          eth_clk_i,  // clock
+   input          eth_rst_i,  // reset
+	input	 [15:0]  eth_dat_i,  // input data
+   input	 [15:0]  eth_cnt_i,  // input byte counter & flags
+	input          eth_dwe_i,  // FIFO write enable
+   input          eth_cwe_i,  // FIFOcntf write enable
+   input          eth_ncsr_i,
+// State signals
+   output         dat_rdy_o,  // FIFO is not empty
+   output         cnt_rdy_o,  // FIFOcntf is not empty
+   output         fifo_wen_o  // FIFO write enable
 );
 
 // Write pointer: binary, gray, write address, wfull
@@ -112,8 +194,8 @@ assign rptr_gray_next = rptr_bin_next ^ (rptr_bin_next >> 1);
 // *** Gray‑pointers synchro ***
 // read pointer for write‑domain
 reg [11:0] g_rptr_sync1, g_rptr_sync2;
-always @(posedge eth_clk_i, posedge eth_rst) begin
-   if(eth_rst) begin
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if(eth_rst_i) begin
       g_rptr_sync1 <= 12'b0;
       g_rptr_sync2 <= 12'b0;
    end else begin
@@ -149,20 +231,20 @@ end
 wire wfull_next;
 assign wfull_next = (wptr_gray_next == {~g_rptr_sync2[11:10],
                      g_rptr_sync2[9:0]});
-always @(posedge eth_clk_i, posedge eth_rst) begin
-   if(eth_rst)
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if(eth_rst_i)
       wfull <= 1'b0;
    else
       wfull <= wfull_next;
 end
 // *********************************
 
-// Сигналы управления обменом с шиной
-wire bus_strobe = wb_cyc_i & wb_stb_i & ~wb_ack_o;	// строб цикла шины
-wire bus_read_req = bus_strobe & ~wb_we_i;         // запрос чтения
-wire bus_write_req = bus_strobe & wb_we_i;         // запрос записи
+// Bus qualifier signals
+wire bus_strobe = wb_cyc_i & wb_stb_i & ~wb_ack_o;	
+wire bus_read_req = bus_strobe & ~wb_we_i;
+wire bus_write_req = bus_strobe & wb_we_i;
 
-// Формирование сигнала подтверждения выбора устройства
+// Acknowledge signal generator (2 wait states)
 reg  [1:0] ack;
 always @(posedge wb_clk_i) begin
    ack[0] <= wb_cyc_i & wb_stb_i;
@@ -170,34 +252,34 @@ always @(posedge wb_clk_i) begin
 end
 assign wb_ack_o = wb_cyc_i & wb_stb_i & ack[1];
 
-reg  [15:0] data;          // Регистр выходных данных
-wire [15:0] buf_data;      // Выходные данные буферной памяти
-wire [15:0] cnt_data;      // Выходные данные FIFOcntf
+reg  [15:0] data;          // Output data reg.
+wire [15:0] buf_data;      // FIFO output data
+wire [15:0] cnt_data;      // FIFOcntf output data
 assign wb_dat_o = data;
 assign dma_dat_o = buf_data;
 
-wire cnt_wf, cnt_re;                   // Сигналы full & empty FIFOcntf
-assign fifo_wen_o = ~wfull & ~cnt_wf;  // Разрешение записи в буферную память
-assign fifo_ren_o = ~rempty & ~cnt_re; // Разрешение чтения буферной памяти
+wire cnt_wf, cnt_re;                   // FIFOcntf full & empty signals
+assign fifo_wen_o = ~wfull & ~cnt_wf; 
+assign dat_rdy_o = ~rempty;
+assign cnt_rdy_o = ~cnt_re;
 
 wire dma_inca, eth_we, eth_cnt_op;
-assign dma_inca = dma_inca_i & dma_stb_i & ~rempty;   // сигнал инкр. по каналу ППД
-assign eth_cnt_op = eth_cwe_i & ~cnt_wf;              // Сигнал записи 
-assign eth_we = eth_dwe_i & ~wfull;                   // сигнал записи по каналу ethernet 
+assign dma_inca = dma_inca_i & dma_stb_i & ~rempty;   // DMA increment address signal
+assign eth_cnt_op = eth_cwe_i & ~cnt_wf;              // FIFOcntf write enable 
+assign eth_we = eth_dwe_i & ~wfull;                   // FIFO write enable
 wire cnt_rrq = bus_read_req & (wb_adr_i[1:0] == 2'b10) & ~cnt_re;
 
-// Формирование сигнала сброса - домен тактовой ethernet
-reg  [1:0]  eth_rstr;
-wire        eth_rst;
-always @(posedge eth_clk_i) begin
-   eth_rstr[0] <= wb_rst_i;
-   eth_rstr[1] <= eth_rstr[0];
-end
-assign eth_rst = eth_rstr[1];
+// *** Read from FIFO ***
+// WB read enable generation (1 clock duration)
+reg pre_read;
+always @(posedge wb_clk_i)
+ pre_read <= bus_read_req;
+wire bus_read = ~pre_read & bus_read_req;
 
-// *** Чтение буферной памяти ***
-wire r_en = ((wb_adr_i[1:0] == 2'b00) & bus_read_req) |
-            (~bus_read_req & dma_inca);   // Сигнал чтения буферной памяти
+// FIFO read enable signal
+wire r_en = ((wb_adr_i[1:0] == 2'b00) & bus_read) |
+            (~bus_read_req & dma_inca);
+
 always @(posedge wb_clk_i, posedge wb_rst_i)  begin
    if (wb_rst_i) begin
       rptr_bin  <= 12'b0;
@@ -225,24 +307,23 @@ always @(posedge wb_clk_i, posedge wb_rst_i)  begin
                data <= {4'b0, rptr_bin};
             2'b10:
                data <= cnt_data;
-//            2'b11:
-//               data <= adr_wc;
-//               data <= 16'b0;
+            default:
+               data <= 16'b0;
          endcase
       end
    end
 end
 // ******************************
 
-// *** Запись в буферную память ***
-always @(posedge eth_clk_i, posedge eth_rst)  begin
-   if (eth_rst) begin
+// *** Write to FIFO ***
+always @(posedge eth_clk_i, posedge eth_rst_i)  begin
+   if (eth_rst_i) begin
       wptr_bin  <= 12'b0;
       wptr_gray <= 12'b0;
    end
    else begin
-      if(eth_cnt_op)
-         wptr_bin <= wptr_bin - 2'b10; // корректировка 2-х слов CRC
+      if(eth_cnt_op && (~eth_ncsr_i))
+         wptr_bin <= wptr_bin - 2'b10; // minus 4 byte of CRC
       else
          wptr_bin  <= wptr_bin_next;
       wptr_gray <= wptr_gray_next;
@@ -250,7 +331,7 @@ always @(posedge eth_clk_i, posedge eth_rst)  begin
 end
 // ********************************
 
-// Блок памяти
+// RAM
 buf2kw bufrx(
    .rdaddress(raddr),
    .wraddress(waddr),
@@ -261,10 +342,10 @@ buf2kw bufrx(
    .q(buf_data)
 );
 
-// FIFO кол-ва принятых байт и флаги (FIFOcntf)
+// FIFOcntf - To store number of received data bytes & flags
 async_fifo #(16, 5) cntrf(
 	.wclk(eth_clk_i),
-   .wrst(eth_rst),
+   .wrst(eth_rst_i),
    .w_en(eth_cnt_op),
    .wdata(eth_cnt_i),
    .wfull(cnt_wf),
@@ -401,7 +482,6 @@ always @(posedge wclk, posedge wrst) begin
    else
       wfull <= wfull_next;
 end
-
 endmodule
 
 
@@ -409,61 +489,63 @@ endmodule
 // Модуль TXBUF
 //=================================================================================
 module txbuf(
-	input				wb_clk_i,	// тактовая частота шины
-   input          wb_rst_i,   // сброс
-//	input  [1:0]	wb_adr_i,	// адрес
-//	input  [15:0]	wb_dat_i,	// входные данные
-//	output [15:0]	wb_dat_o,	// выходные данные
-//	input				wb_cyc_i,	// начало цикла шины
-//	input				wb_we_i,		// разрешение записи (0 - чтение)
-//	input				wb_stb_i,	// строб цикла шины
-//	output			wb_ack_o,	// подтверждение выбора устройства
-// ПДП (DMA)
-	input				dma_stb_i,	// строб
-   input          dma_inca_i, // сигнал инкремента адреса
-	input  [15:0]	dma_dat_i,	// входные данные
-	input				dma_we_i,	// разрешение записи (0 - чтение)
-// Ethernet
-   input          eth_inca_i, // сигнал инкремента адреса
-	output [15:0]	eth_dat_o,	// выходные данные
-	input				eth_clk_i,	// тактовая частота
-// FIFO
-   output         fifo_ren_o, // разрешение работы с FIFO
-   output         fifo_wen_o  // разрешение работы с FIFO
+// Domain WB
+	input				wb_clk_i,	// clock
+   input          wb_rst_i,   // reset
+//	input  [1:0]	wb_adr_i,	// module address
+	input  [15:0]	wb_dat_i,	// input data
+//	output [15:0]	wb_dat_o,	// output data
+	input				wb_cyc_i,	// cycle signal
+	input				wb_we_i,		// [1]=write, [0]=read
+	input				wb_stb_i,	// strobe  signal
+	output			wb_ack_o,	// ack. signal
+// DMA (domain WB)
+	input				dma_stb_i,	// DMA strobe
+	input  [15:0]	dma_dat_i,	// input data
+	input				dma_we_i,	// [0]=read, [1]=write
+// Domain Ethernet
+   input          eth_inca_i, // address register inc.
+	output [15:0]	eth_dat_o,	// output data
+	input				eth_clk_i,	// clock
+   input          eth_rst_i,  // reset
+// FIFO signals
+   output         ren_o,      // enable read from FIFO
+   output         wen_o       // enable write to FIFO
 );
 
-// Сигналы управления обменом с шиной
-//wire bus_strobe = wb_cyc_i & wb_stb_i & ~wb_ack_o;	// строб цикла шины
-//wire bus_we = bus_strobe & wb_we_i;						// запрос записи
+// WB qualifier signals
+wire bus_strobe = wb_cyc_i & wb_stb_i & ~wb_ack_o;
+//wire bus_read_req = bus_strobe & ~wb_we_i; 
+wire bus_write_req = bus_strobe & wb_we_i;
 
-// Сигналы управления обменом по каналу ПДП
-wire			dma_we; //, dma_inca;
-assign dma_we = dma_stb_i & dma_we_i & ~wfull;
-//assign dma_inca = dma_inca_i & dma_stb_i;
-
-// Формирование сигнала подтверждения выбора устройства
-//reg  [1:0] ack;
-//always @(posedge wb_clk_i) begin
-//   ack[0] <= wb_cyc_i & wb_stb_i;
-//   ack[1] <= wb_cyc_i & ack[0];
-//end
-//assign wb_ack_o = wb_cyc_i & wb_stb_i & ack[1];
-
-// Формирование сигнала сброса - домен тактовой ethernet
-reg  [1:0]  eth_rstr;
-wire        eth_rst;
-always @(posedge eth_clk_i) begin
-   eth_rstr[0] <= wb_rst_i;
-   eth_rstr[1] <= eth_rstr[0];
+// WB ack generator (2 wait states)
+reg  [1:0] ack;
+always @(posedge wb_clk_i) begin
+   ack[0] <= wb_cyc_i & wb_stb_i;
+   ack[1] <= wb_cyc_i & ack[0];
 end
-assign eth_rst = eth_rstr[1];
+assign wb_ack_o = wb_cyc_i & wb_stb_i & ack[1];
+
+// WB write enable generation (1 clock duration)
+reg pre_write;
+always @(posedge wb_clk_i)
+ pre_write <= bus_write_req;
+wire bus_we = ~pre_write & bus_write_req;
+
+// DMA write enable signal
+wire dma_we = dma_stb_i & dma_we_i;
+
+// Selector DMA/WB
+wire wren = (dma_stb_i ? dma_we : bus_we) & ~wfull;
+wire [15:0] wdata = dma_stb_i ? dma_dat_i : wb_dat_i;
 
 // Write pointer: binary, gray, write address, wfull
 reg  [10:0] wptr_bin,  wptr_gray;
 reg  wfull;
 wire [10:0] wptr_bin_next, wptr_gray_next;
 wire [9:0] waddr = wptr_bin[9:0];
-assign wptr_bin_next  = wptr_bin + dma_we;
+//assign wptr_bin_next  = wptr_bin + dma_we;
+assign wptr_bin_next  = wptr_bin + wren;
 assign wptr_gray_next = wptr_bin_next ^ (wptr_bin_next >> 1);
 
 // Read pointer: binary, gray, read address, rempty
@@ -489,8 +571,8 @@ end
 
 // Write pointer for read‑domain
 reg [10:0] g_wptr_sync1, g_wptr_sync2;
-always @(posedge eth_clk_i, posedge eth_rst) begin
-   if(eth_rst) begin
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if(eth_rst_i) begin
       g_wptr_sync1 <= 11'b0;
       g_wptr_sync2 <= 11'b0;
    end else begin
@@ -504,8 +586,8 @@ end
 wire rempty_next;
 assign rempty_next = (g_wptr_sync2 == rptr_gray_next);
 
-always @(posedge eth_clk_i, posedge eth_rst) begin
-   if(eth_rst)
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if(eth_rst_i)
       rempty <= 1'b1;
    else
       rempty <= rempty_next;
@@ -521,13 +603,13 @@ always @(posedge wb_clk_i, posedge wb_rst_i) begin
       wfull <= wfull_next;
 end
 
-assign fifo_wen_o = ~wfull;            // Разрешение записи в буферную память
-assign fifo_ren_o = ~rempty;           // Разрешение чтения буферной памяти
+assign wen_o = ~wfull;
+assign ren_o = ~rempty;
 // *********************************
 
-// *** Чтение буферной памяти ***
-always @(posedge eth_clk_i, posedge eth_rst)  begin
-   if (eth_rst) begin
+// *** Read from RAM ***
+always @(posedge eth_clk_i, posedge eth_rst_i)  begin
+   if (eth_rst_i) begin
       rptr_bin  <= 11'b0;
       rptr_gray <= 11'b0;
    end
@@ -537,7 +619,7 @@ always @(posedge eth_clk_i, posedge eth_rst)  begin
    end
 end
 
-// *** Запись в буферную память ***
+// *** Write to RAM ***
 always @(posedge wb_clk_i, posedge wb_rst_i) begin
    if(wb_rst_i) begin
       wptr_bin  <= 11'b0;
@@ -550,14 +632,14 @@ always @(posedge wb_clk_i, posedge wb_rst_i) begin
 end
 // ********************************
 
-// Блок памяти
+// RAM
 buf1kw bufwr(
 	.rdaddress(raddr),
 	.rdclock(eth_clk_i),
 	.wraddress(waddr),
 	.wrclock(wb_clk_i),
-	.data(dma_dat_i),
-	.wren(dma_we),
+	.data(wdata),
+	.wren(wren),
 	.q(eth_dat_o)
 );
 endmodule
@@ -614,5 +696,4 @@ rom bdrom(
 	.rden(~wb_we_i & wb_cyc_i & rom_stb_i),
    .q(romdat)
 );
-
 endmodule

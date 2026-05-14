@@ -38,3 +38,44 @@ always @(posedge clk_i, posedge start) begin
 end
 
 endmodule
+
+
+// =============================================================================
+// Модуль формирования сигнала сброса тактового домена Ethernet по комбинированному
+// сигналу сброса тактового домена шины.
+//
+// SDC constraint
+//       set_false_path -from [get_registers {*rst_sync_eth*eth_rst[0]*}] \
+//               -to   [get_registers {*rst_sync_eth*rst_sig*}]
+//       set_false_path -from [get_registers {*rst_sync_eth*rst_sig*}] \
+//               -to   [get_registers {*rst_sync_eth*eth_rst*}]
+// =============================================================================
+ 
+`default_nettype none
+ 
+module rst_sync_eth(
+    input  wire       wb_clk_i,   // тактовая частота шины
+    input  wire       wb_rst_i,   // сигнал сброса
+    input  wire       eth_clk_i,  // тактовая частота Ethernet
+    output wire       eth_rst_o   // сигнал сброса домена Ethernet
+);
+
+reg       rst_sig = 1'b1;
+reg [1:0] eth_rst = 2'b0;
+ 
+always @(posedge wb_clk_i, posedge wb_rst_i) begin
+   if(wb_rst_i)
+      rst_sig <= 1'b0;
+   else if(eth_rst[1])
+      rst_sig <= 1'b1;
+end
+ 
+always @(posedge eth_clk_i) begin
+   eth_rst[0] <= ~rst_sig;
+   eth_rst[1] <= eth_rst[0];
+end
+assign eth_rst_o = |eth_rst;
+
+endmodule
+
+`default_nettype wire
