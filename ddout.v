@@ -5,7 +5,7 @@
 //=================================================================================
 module ddout(
 	input				txclk_i,			// Синхросигнал выходных данных
-	input				rst,				// Сигнал сброса
+	input				rst_i,			// Сигнал сброса
 	input				txen_i,			// Сигнал готовности входных данных
 	input  [7:0]	dat_i,			// Шина входных данных
 	output [3:0]	dat_o,			// Шина выходных данных
@@ -27,15 +27,15 @@ assign dat_o = dato;
 assign txerr_o = wr_err;
 
 // Генерация нового синхросигнала
-always @(posedge txclk_i, posedge rst)
+always @(posedge txclk_i, posedge rst_i)
 //always @(posedge txclk_i)
-	if(rst)	txclk_reg <= 1'b0;
+	if(rst_i)	txclk_reg <= 1'b0;
 	else		txclk_reg <= txclk_reg + 1'b1;
 
 assign txclk_o = txclk_reg;
 
-always @(negedge txclk_o, posedge rst) begin
-	if(rst) begin
+always @(negedge txclk_o, posedge rst_i) begin
+	if(rst_i) begin
 		waddr <= 2'b0; wr_err <= 1'b0;
 	end
 	else if(txen_i) begin
@@ -49,8 +49,8 @@ always @(negedge txclk_o, posedge rst) begin
 	end
 end
 
-always @(negedge txclk_i, posedge rst) begin
-	if(rst) begin
+always @(negedge txclk_i, posedge rst_i) begin
+	if(rst_i) begin
 		eo <= 1'b0; txen_o <= 1'b0;
 		raddr <= 2'b0; dato <= 4'o0;
 	end

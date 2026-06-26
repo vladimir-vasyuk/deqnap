@@ -3,11 +3,9 @@
 //---------------------------------------------------------------------------------
 // Модуль приема кадра данных
 //=================================================================================
-module ethreceive #(
-   parameter MAX_SIZE = 2048
-)(
+module ethreceive(
 	input					clk_i,      // Синхросигнал
-	input					clr_i,      // Сигнал сброса
+	input					rst_i,      // Сигнал сброса
 	input					rxena_i,    // Сигнал разрешения приема
 	input      [7:0]	data_i,     // Шина входных данных
 	input					rxdv_i,     // Сигнал достоверности данных
@@ -32,15 +30,14 @@ reg  [47:0]	recmac;			// Принятый MAC адрес
 reg  [7:0]	bufdat;			// Буфер принятых данных
 reg			runt_err;      // Сигнал ошибки размера кадра
 reg			crc_err;       // Сигнал ошибки CRC
-reg         long_err;      // Сигнал превышения размера кадра
 reg  [5:0]	sigwait;			// таймер ожидания
 //reg  [1:0]  spfrtyp;       // Код приятого спец. кадра (ignored by  DEQNA)
-reg         cmpmac;        // Результат проверки MAC-адреса
+reg         cmpmace;       // Результат проверки MAC-адреса
 reg  [10:0] rxcntb;        // Счетчик принятых байтов
 
 assign macdat_o = recmac;
 assign macrdy_o = ic[2] & ic[1] & ~ic[0];
-assign rxfrsts_o = {1'b0, cmpmac, long_err, crc_err, runt_err, rxcntb[10:0]};
+assign rxfrsts_o = {2'b0, cmpmace, crc_err, runt_err, rxcntb[10:0]};
 
 // Конечный автомат канала приема
 localparam IDLE		= 3'd0;
@@ -54,8 +51,8 @@ localparam FINISH		= 3'd7;
 reg  [3:0]  rx_state;
 
 // Основной блок
-always@(negedge clk_i, posedge clr_i) begin
-   if(clr_i) begin
+always@(negedge clk_i, posedge rst_i) begin
+   if(rst_i) begin
       rx_state <= IDLE;		// Начальное состояние автомата
    end
    else begin
@@ -70,10 +67,9 @@ always@(negedge clk_i, posedge clr_i) begin
 				sigwait <= 6'b111111;
 				if(rxdv_i & rxena_i) begin                   // Признак принятых данныхи и сигнал разрешения приема
 					if(data_i[7:0] == 8'h55) begin				// Данные преамбулы (0x55)?
-                  cmpmac <= 1'b0;
+                  cmpmace <= 1'b1;
 						crc_err <= 1'b0;                       // Сброс сигнала ошибки CRC
                   runt_err <= 1'b0;                      // Сброс сигнала ошибки размера кадра
-                  long_err <= 1'b0;                      // Сброс сигнала превышения размера кадра
                   rxcntb <= 11'o0000;                    // Начальное значения счетчика приема
 						rx_state<=SIX_55;								// Переход к приему преамбулы
 					end
@@ -123,12 +119,7 @@ always@(negedge clk_i, posedge clr_i) begin
 				end
 				else begin
 					if(rxdv_i == 1'b1) begin						// Есть разрешение приема данных?
-                  if(rxcntb < MAX_SIZE)                  // Максимальный размер?
-                     rxcntb <= rxcntb + 1'd1;				// Нет - инкремент счетчика принятых данных.
-                  else begin
-                     long_err <= 1'b1;                   // Да, установить флаг ошибки и ...
-                     rx_state <= CHK_MAC;                // ... прервать прием
-                  end
+                  rxcntb <= rxcntb + 1'd1;				// Нет - инкремент счетчика принятых данных.
 						if(ic < 3'd6) begin							// Меньше 6 байт?
 							recmac <= {data_i[7:0], recmac[47:8]};	// Да - формирование MAC адреса назначения, ...
 							ic <= ic + 1'd1;								// ... инкремент счетчика.
@@ -186,13 +177,13 @@ always@(negedge clk_i, posedge clr_i) begin
 			end
 			CHK_MAC: begin                                  // Проверка MAC адреса принятого кадра
 				if(cmpdon_i) begin
-               cmpmac <= cmpres_i;                        // Сохранить результат и ...
+               cmpmace <= ~cmpres_i;                        // Сохранить результат и ...
                rx_state <= FINISH;                       // ... переход к завершению
 				end
 				else begin                                   // Ждем сигнал завершения проверки
 					sigwait <= sigwait -1'b1;
 					if(|sigwait == 1'b0) begin                // Сигнала завершения проверки нет, ...
-                  cmpmac <= 1'b0;                        // ... установить признак ошибки ...
+                  cmpmace <= 1'b1;                        // ... установить признак ошибки ...
 						rx_state <= FINISH;                    // ... переход к завершению
                end
 				end

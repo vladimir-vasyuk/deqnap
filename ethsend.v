@@ -5,7 +5,7 @@
 //=================================================================================
 module ethsend(
    input         clk_i,       // Синхросигнал
-   input         clr_i,       // Сигнал сброса
+   input         rst_i,       // Сигнал сброса
    input         txena_i,     // Сигнал разрешения передачи
    input         txdatv_i,    // Сигнал  наличия данных
    input         nocrc_i,     // Не обрабатывать CRC
@@ -53,8 +53,8 @@ initial
    end
 
 // Основной блок
-always@(negedge clk_i, posedge clr_i) begin
-   if(clr_i) tx_state <= IDLE;
+always@(negedge clk_i, posedge rst_i) begin
+   if(rst_i) tx_state <= IDLE;
    else begin
       case(tx_state)
          IDLE: begin

@@ -38,7 +38,7 @@ module ether(
 	output [15:0]	md_out_o,   // Блок управления - данные чтения
 	output [7:0]	md_sts_o,   // Блок управления - данные состояния
 
-	output [1:0]	prmstp_o,	// Режим прослушивания/установки
+	output [2:0]	prmstp_o,	// Режим прослушивания/установки
 	output			macrdy_o,   // MAC адрес сформирован
 	output [47:0]	macdat_o,	// MAC адрес принятого кадра
 	input				cmpdon_i,	// Операция сравнения завершена
@@ -56,8 +56,8 @@ wire			crcentx;		// Сигнал разрешения CRC канала пере�
 wire			crcrerx;		// Сигнал сброса CRC канала приема
 wire			crcenrx;		// Сигнал разрешения CRC канала приема
 
-//======================= MDC ======================//
-wire			mdc_err;		// Сигнал ошибки (!!! пока не используется)
+//======================= MC =======================//
+wire			md_err;		// Сигнал ошибки (!!! пока не используется)
 
 //================== Прием/передача =================//
 wire			skipb;		// Пропуск байта (DescriptorBits[6])
@@ -72,17 +72,17 @@ assign stserrs_o = {e_crs, crs_err, tx_errg, rx_errg, txdone};
 
 //================ Синхронизация ====================//
 wire			loop;				// Сигнал работы петли
-wire			mcast;			// Режим широковещания разрешен (пока не используется)
+//wire			mcast;			// Режим широковещания разрешен (пока не используется)
 wire			txrdyl;			// Сигнал готовности данных передачи
 wire			rx_enable;		// Разрешение приема
 wire        nocrc;         // Не обрабатывать CRC
 
-synchonize synch(
+synchbe synche(
 	.clk_i(e_rxc),
 	.ethmode_i(ethmode_i),
 	.rx_ena_o(rx_enable),
 	.skipb_o(skipb),
-	.mcast_o(mcast),
+//	.mcast_o(mcast),
 	.prmstp_o(prmstp_o),
 	.txrdy_o(txrdyl),
    .nocrc_o(nocrc),
@@ -105,7 +105,7 @@ wire			rxdvm;			// Выходной сигнал готовности данны
 wire			rxclk;			// Синхросигнал канала приема
 ddin dd_in(
    .rxclk_i(e_rxc),
-   .rst(rst_i),
+   .rst_i(rst_i),
    .rxdv(e_rxdv),
    .dat_i(e_rxd[3:0]),
    .dat_o(ddinm),
@@ -127,7 +127,7 @@ wire			txclkm;			// Новый синхросигнал для 10Mb-100Mb
 
 ddout dd_out(
    .txclk_i(e_txc),
-   .rst(rst_i),
+   .rst_i(rst_i),
    .txen_i(txens),
    .dat_i(txdb),
    .dat_o(ddoutm),
@@ -147,7 +147,7 @@ assign txclkb_o = txclkl;
 
 ethsend ethsendm(
    .clk_i(txclkl),
-   .clr_i(rst_i),
+   .rst_i(rst_i),
    .txena_i(txrdyl),
    .txdatv_i(txfifoe_i),
    .nocrc_i(nocrc),
@@ -179,7 +179,7 @@ assign rxena = (loop? loop : rx_enable) & rxfifoe_i;
 
 ethreceive ethrcvm(
    .clk_i(rxclkl),
-   .clr_i(rst_i),
+   .rst_i(rst_i),
    .rxena_i(rxena),
    .data_i(rxdbl),
    .rxdv_i(rxdvl),
@@ -222,7 +222,7 @@ mdint mdintm(
    .rst_i(rst_i),
    .evt_i(md_evt_i),
    .mdiol(e_mdio),
-   .err_o(mdc_err),
+   .err_o(md_err),
    .ctl_i(md_ctr_i),
    .val_i(md_val_i),
    .val_o(md_out_o),
@@ -232,14 +232,14 @@ mdint mdintm(
 endmodule
 
 //============= Блок синхронизации =================//
-module synchonize(
+module synchbe(
 	input				clk_i,
 	input  [9:0]	ethmode_i,
 	output			rx_ena_o,
 	output			skipb_o,
 	output			txrdy_o,
-	output			mcast_o,
-	output [1:0]	prmstp_o,
+//	output			mcast_o,
+	output [2:0]	prmstp_o,
    output			nocrc_o,
 	output			loop_o
 );
@@ -254,22 +254,23 @@ assign ext_loop_o = eloop_r[1];
 assign skipb_o = skipb_r[1];
 assign setup_o = setup_r[1];
 assign txrdy_o = txrdy_r[1];
-assign mcast_o = mcast_r[1];
-assign prmstp_o[1] = promis_r[1] | inte_loop_o | setup_o | ext_loop_o;
+//assign mcast_o = mcast_r[1];
 assign prmstp_o[0] = setup_o;
+assign prmstp_o[1] = promis_r[1] | inte_loop_o | setup_o | ext_loop_o;
+assign prmstp_o[2] = mcast_r[1];
 assign nocrc_o = nocrc_r[1];
 assign loop_o = int_loop_o | inte_loop_o | setup_o;
 
 always @(posedge clk_i) begin
-	rx_ena_r[0] <= ethmode_i[0]; rx_ena_r[1] <= rx_ena_r[0];
-	iloop_r[0] <= ethmode_i[1]; iloop_r[1] <= iloop_r[0];
-	ieloop_r[0] <= ethmode_i[2]; ieloop_r[1] <= ieloop_r[0];
-	eloop_r[0] <= ethmode_i[3]; eloop_r[1] <= eloop_r[0];
-	setup_r[0] <= ethmode_i[4]; setup_r[1] <= setup_r[0];
-	skipb_r[0] <= ethmode_i[5]; skipb_r[1] <= skipb_r[0];
-	txrdy_r[0] <= ethmode_i[6]; txrdy_r[1] <= txrdy_r[0];
-	mcast_r[0] <= ethmode_i[7]; mcast_r[1] <= mcast_r[0];
-	promis_r[0] <= ethmode_i[8]; promis_r[1] <= promis_r[0];
+	rx_ena_r[0] <= ethmode_i[5]; rx_ena_r[1] <= rx_ena_r[0];
+	iloop_r[0] <= ethmode_i[6]; iloop_r[1] <= iloop_r[0];
+	ieloop_r[0] <= ethmode_i[7]; ieloop_r[1] <= ieloop_r[0];
+	eloop_r[0] <= ethmode_i[8]; eloop_r[1] <= eloop_r[0];
+	setup_r[0] <= ethmode_i[1]; setup_r[1] <= setup_r[0];
+	skipb_r[0] <= ethmode_i[2]; skipb_r[1] <= skipb_r[0];
+	txrdy_r[0] <= ethmode_i[0]; txrdy_r[1] <= txrdy_r[0];
+	mcast_r[0] <= ethmode_i[3]; mcast_r[1] <= mcast_r[0];
+	promis_r[0] <= ethmode_i[4]; promis_r[1] <= promis_r[0];
    nocrc_r[0] <= ethmode_i[9]; nocrc_r[1] <= nocrc_r[0];
 end
 

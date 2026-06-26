@@ -86,7 +86,7 @@ module cmpmac #(
    input  [1:0]   wb_sel_i,   // byte selector
    output         wb_ack_o,   // ack. signal
 // Domain Ethernet
-   input  [1:0]   eth_pms_i,  // [0]=stpac  [1]=promisc
+   input  [2:0]   eth_pms_i,  // [0]=stpac  [1]=promisc [2]=mcast
    input          eth_clk_i,  // clock
    input          eth_rst_i,  // active-high, synchronised to eth_clk_i
    input          eth_macr_i, // MAC ready — level, held during CHK_MAC
@@ -98,6 +98,7 @@ module cmpmac #(
 // stpac / promisc decode
 wire stpac   = eth_pms_i[0];
 wire promisc = eth_pms_i[1] | eth_pms_i[0];
+wire mcast = eth_pms_i[2];
 
 // WB ack generator (2 wait states)
 reg [1:0]   ack;
@@ -308,6 +309,9 @@ end
 reg         cmp_res;
 reg         cmp_done;
 
+// Multicast bit processing
+wire mcast_res = mcast ? eth_macd_i[0] : 1'b0;
+
 // 48-bit match on the current Port-B registered output
 wire entry_match = (q_bl == eth_macd_i[15:0])  &
                    (q_bm == eth_macd_i[31:16]) &
@@ -338,7 +342,7 @@ always @(posedge eth_clk_i, posedge eth_rst_i) begin
    end
 end
 
-assign cmp_res_o  = promisc ? 1'b1 : cmp_res;
-assign cmp_done_o = promisc ? 1'b1 : cmp_done;
+assign cmp_res_o  = promisc ? 1'b1 : (mcast_res | cmp_res);
+assign cmp_done_o = promisc ? 1'b1 : (mcast_res ? 1'b1 : cmp_done);
 
 endmodule

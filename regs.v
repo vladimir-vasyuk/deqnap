@@ -4,6 +4,56 @@
 // Модуль внешних регистров и регистров Ethernet.
 // Доступ к внешним регистрам как с внутренней так и с внешенй шины
 // Доступ к регистрам Ethernet только с внутренней шины
+//
+// Внешние регистры
+// BASE + 0
+// BASE + 2
+// BASE + 4  - RBDL low
+// BASE + 6  - RBDL high
+// BASE + 10 - TBDL low
+// BASE + 12 - TBDL high
+// BASE + 14 - VAR
+// BASE + 16 - CSR
+//
+// Внутренние регистры :LB=24040
+// LB+0 - ошибки приема/передачи и данные регистра режима работы
+//  Чтение: {3'b0, e_crser, e_txerg, e_rxerg, e_mode[8:1], e_txdn, etprdy_i}
+//  Запись: {9'bx, promis, mcast, skipb, stpac, txrdy, 1'bx}
+// LB+2 - кол-во байт для передачи (только запись)
+//  Запись:
+//    15-12: не используются
+//    10-0:  данные
+// LB+4 - данные MD
+// LB+6 - статус MD
+//  Чтение: статус:
+//		15: 	 1/0 - ready/busy
+//		14,13: 10-1000Мб/с; 01-100Мб/с; 00-10Мб/с; 11-зарезервированно
+//		12:	 1-полный дуплекс; 0-полудуплекс
+//		11:    зарезервированно (0)
+//		10:    1-MDI crossover; 0-MDI
+//		09:    1-приемник готов; 0-приемник не готов
+//		08:    1-связь есть; 0-связи нет
+//    07:    0
+//         управление:
+//		6:    1/0 - запись/чтение
+//		5:    1 - старт
+//		4:0   адрес регистра
+//  Запись:
+//    15-7: не используются
+//		6:    1/0 - запись/чтение
+//		5:    1 - старт
+//		4-0:  адрес регистра
+// LB+10 - общее назначение
+//   Чтение: {bdroms, 10'b0, stm_res, stm_ena, leds[2:0]}
+//   Запись: {11'bx,  stm_res, stm_ena, leds[2:0]}
+// LB+12 - не используется
+// LB+14 - не используется
+// LB+16 - не используется
+// LB+20 - LB+26 - регистр физического адреса модуля и контрольная сумма
+//  Чтение: LB+20: MAC address [15:0]
+//          LB+22: MAC address [31:16]
+//          LB+24: MAC address [47:32]
+//          LB+26: Контрольная сумма
 //=================================================================================
 module extregs(
 // Внутренняя шина
@@ -35,10 +85,10 @@ module extregs(
 	output [9:0]   e_mode_o,   // управляющие сигналы для модуля ethernet
 	input  [4:0]   e_stse_i,   // состояние модуля ethernet
 	output [10:0]  e_txcntb_o, // кол-во байт канала передачи
-	output [15:0]  e_mdval_o,  // данные для блока MDC
-	input  [15:0]  e_mdval_i,  // данные из блока MDC
-	output [6:0]   e_mdctrl_o, // управляющие сигналы для блока MDC
-	input  [7:0]   e_mdstat_i, // состояние блока MDC
+	output [15:0]  e_mdval_o,  // данные для блока MD
+	input  [15:0]  e_mdval_i,  // данные из блока MD
+	output [6:0]   e_mdctrl_o, // управляющие сигналы для блока MD
+	input  [7:0]   e_mdstat_i, // состояние блока MD
    input          etprdy_i,   // признак наличия данных в FIFO канала приема
 // Sanity timer
 	output         santm_o,    // Сигнал генерации BDCOK
@@ -127,6 +177,19 @@ assign let_ack = lwb_cyc_i & let_stb_i & etack[1];
 //assign s4_n = ~s4_i;
 
 //************************************************
+// Синхронизация сигналов модуля ethernet
+wire e_crs, e_crser, e_txerg, e_rxerg, e_txdn;
+syncheb synchb(
+	.clk_i(lwb_clk_i),
+	.ethsig_i(e_stse_i),
+   .e_crs_o(e_crs),
+   .e_crser_o(e_crser),
+   .e_txerg_o(e_txerg),
+   .e_rxerg_o(e_rxerg),
+   .e_txdn_o(e_txdn)
+);
+
+//************************************************
 // Регистр управления/состояния - csr - 174456
 //
 reg			csr_ri = 1'b0;		// 15	Receive Interrupt Request (RW1)
@@ -146,8 +209,8 @@ reg			csr_ni = 1'b0;		// 02	Nonexistance-memory timeout Interrupt (RO)
 reg			csr_sr = 1'b0;		// 01	Software Reset (RW)
 reg			csr_re = 1'b0;		// 00	Receiver Enable (RW)
 wire [15:0] csr;
-//assign csr_ca = (~csr_il)? 1'b0 : 1'b1;//(~errs[4]);
-assign csr_ca = (~csr_il)? 1'b0 : e_stse_i[4];
+//assign csr_ca = (~csr_il)? 1'b0 : 1'b1;//(~e_crs);
+assign csr_ca = (~csr_il)? 1'b0 : e_crs;
 assign csr = {csr_ri,1'b0,csr_ca,e_mdstat_i[0],1'b0,csr_se,csr_el,csr_il,csr_xi,csr_ie,csr_rl,csr_xl,csr_bd,csr_ni,csr_sr,csr_re};
 
 //************************************************
@@ -238,11 +301,11 @@ assign extmode = csr_il & csr_el & (~csr_re);
 assign rxmode = csr_re;
 assign bdroms = (~csr_il) & csr_el & (~csr_re) & csr_bd;
 
-wire [6:0]	e_mode;			// Регистр режима работы 				-- 24040
-assign e_mode = {txrdy, skipb, stpac, extmode, intextmode, intmode, rxmode};
-reg  [10:0]	e_txcntb;		// Регистры кол-ва байт передачи		-- 24042
-reg  [15:0]	e_mdval;			// входные/выходные данные MD 		-- 24044
-reg  [6:0]	e_mdctrl;		// сигналы управления MD 				-- 24046
+wire [9:0]	e_mode;			// Регистр режима работы
+assign e_mode = {bdroms, extmode, intextmode, intmode, rxmode, promis, mcast, skipb, stpac, txrdy};
+reg  [10:0]	e_txcntb;		// Регистры кол-ва байт передачи
+reg  [15:0]	e_mdval;			// входные/выходные данные MD
+reg  [6:0]	e_mdctrl;		// сигналы управления MD
 reg			e_mdmux = 1'b0;// мультиплексер данных MD
 // управление (e_mdctrl):
 //		6:		1/0 - write/read
@@ -257,21 +320,15 @@ reg			e_mdmux = 1'b0;// мультиплексер данных MD
 //		1:		1-приемник готов; 0-приемник не готов
 //		0:		1-связь есть; 0-связи нет
 assign e_txcntb_o = e_txcntb;
-assign e_mode_o = {bdroms ,promis, mcast, e_mode[6:0]};
+assign e_mode_o = e_mode[9:0];
 assign e_mdval_o = e_mdval;
 assign e_mdctrl_o = e_mdctrl;
 
-// 24050 - регистр общего назначения (РОНЕ)
-// чтение - (bdroms,9'b0,stm_ena,promis,mcast,leds[2:0])
-// запись - (8'b0,stm_res,1'b0,stm_ena,promis,mcast,leds[2:0])
 reg			stm_res;          // генерация BDCOK
 reg			stm_ena;				// регистр разрешения sanity timer
 reg  [2:0]	leds;					// индикация
-
 assign santm_o = stm_res & stm_ena;
 assign dev_ind_o = leds;
-
-// 24060 - 24066 - регистр физического адреса модуля и контрольная сумма 
 
 `ifdef md_debug
 reg  [6:0]  ext_mdctrl = 6'b0;
@@ -296,7 +353,7 @@ always @(posedge lwb_clk_i) begin
 				if (sa_rom_chk)
 					edat <= {8'hFF, macval[63:56]};
 				else
-               edat <= e_mdmux? {13'h00, e_stse_i[2:0]} : {8'hFF, macval[15:8]};
+               edat <= e_mdmux? {13'h00, e_txerg, e_rxerg, e_txdn} : {8'hFF, macval[15:8]};
 			end
 			3'b010: begin	// Base + 04
 `ifdef md_debug
@@ -360,7 +417,7 @@ always @(posedge lwb_clk_i) begin
 	// Сброс регистров
 	if(comb_res) begin
 		// Сброс регистра управления
-		csr_ri  <= 1'b0; csr_el <= 1'b0; csr_se <= 1'b0;
+		csr_ri <= 1'b0; csr_el <= 1'b0; csr_se <= 1'b0;
 		csr_il <= 1'b0; csr_xi <= 1'b0; csr_ie <= 1'b0; csr_rl <= 1'b1; csr_xl <= 1'b1;
 		csr_bd <= 1'b0; csr_ni <= 1'b0; csr_sr <= 1'b0; csr_re <= 1'b0;
 
@@ -482,14 +539,14 @@ end
 always @(posedge lwb_clk_i) begin
 	if (lerd_req == 1'b1) begin
 		case (lwb_adr_i[3:0])
-			4'b0000:	// 24040 - статус и ошибки приема/передачи
-            etdat <= {4'b0, e_stse_i[3:0], etprdy_i, e_mode[6:0]};
+			4'b0000:	// 24040 - ошибки приема/передачи и данные регистра режима работы
+            etdat <= {3'b0, e_crser, e_txerg, e_rxerg, e_mode[8:1], e_txdn, etprdy_i};
 			4'b0010:	// 24044 - данные MD
 				etdat <= e_mdval_i;
 			4'b0011:	// 24046 - статус MD
 				etdat <= {e_mdstat_i[7:0], 1'b0, e_mdctrl[6:0]};
 			4'b0100:	// 24050 - данные регистра общего назначения
-				etdat <= {bdroms, 9'b0, stm_ena, promis, mcast, leds[2:0]};
+				etdat <= {bdroms, 10'b0, stm_res, stm_ena, leds[2:0]};
 //			4'b0110:	// 24054
 //			4'b0111:	// 24056
 			4'b1000: // 24060 - MAC-адрес
@@ -525,7 +582,7 @@ always @(posedge lwb_clk_i, posedge comb_res) begin
       if (lwb_sel_i[0] == 1'b1) begin  // Запись младшего байта
          case (lwb_adr_i[3:0])
             4'b0000:			// 24040 - установка контрольных сигналов
-               {txrdy, skipb, stpac} <= lwb_dat_i[6:4];
+               {promis, mcast, skipb, stpac, txrdy} <= lwb_dat_i[5:1];
             4'b0001:			// 24042 - запись кол-ва байт для передачи
                e_txcntb[7:0] <= lwb_dat_i[7:0];
             4'b0010:			// 24044 - данные для MD
@@ -533,9 +590,8 @@ always @(posedge lwb_clk_i, posedge comb_res) begin
             4'b0011:			// 24046 - управляющие сигналы для MD
                e_mdctrl[6:0] <= lwb_dat_i[6:0];
             4'b0100: begin	// 24050 - управляющие сигналы РОНЕ
-               stm_ena <= lwb_dat_i[5];
-               promis <= lwb_dat_i[4];
-               mcast <= lwb_dat_i[3];
+               stm_res <= lwb_dat_i[4];
+               stm_ena <= lwb_dat_i[3];
                leds[2:0] <= lwb_dat_i[2:0];
             end
 //            4'b0110: begin     // 24054
@@ -550,8 +606,7 @@ always @(posedge lwb_clk_i, posedge comb_res) begin
                e_txcntb[10:8] <= lwb_dat_i[10:8];
             4'b0010:	// 24044 - данные для MD
                e_mdval[15:8] <= lwb_dat_i[15:8];
-            4'b0100: // 24050 - управляющие сигналы РОНЕ
-               stm_res <= lwb_dat_i[7];
+//            4'b0100: // 24050 - управляющие сигналы РОНЕ
          endcase
       end
    end
@@ -570,6 +625,34 @@ always @(posedge lwb_clk_i, posedge comb_res) begin
       if(~e_mdstat_i[7] & e_mdctrl[5]) // Сброс сигнала старта MDC
          e_mdctrl[5] <= 1'b0;
    end
+end
+
+endmodule
+
+//============= Модуль синхронизации =================//
+module syncheb(
+	input				clk_i,
+	input  [4:0]	ethsig_i,
+   output			e_crs_o,
+   output			e_crser_o,
+   output			e_txerg_o,
+   output			e_rxerg_o,
+   output			e_txdn_o
+);
+
+reg  [1:0] e_crs, e_crser, e_txerg, e_rxerg, e_txdn;
+assign e_crs_o = e_crs[1];
+assign e_crser_o = e_crser[1];
+assign e_txerg_o = e_txerg[1];
+assign e_rxerg_o = e_rxerg[1];
+assign e_txdn_o = e_txdn[1];
+
+always @(posedge clk_i) begin
+   e_txdn[0]  <= ethsig_i[0]; e_txdn[1]  <= e_txdn[0];
+   e_rxerg[0] <= ethsig_i[1]; e_rxerg[1] <= e_rxerg[0];
+   e_txerg[0] <= ethsig_i[2]; e_txerg[1] <= e_txerg[0];
+   e_crser[0] <= ethsig_i[3]; e_crser[1] <= e_crser[0];
+   e_crs[0]   <= ethsig_i[4]; e_crs[1]   <= e_crs[0];
 end
 
 endmodule

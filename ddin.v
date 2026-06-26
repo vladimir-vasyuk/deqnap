@@ -5,7 +5,7 @@
 //=================================================================================
 module ddin(
 	input				rxclk_i,			// Синхросигнал
-	input				rst,				// Сигнал сброса
+	input				rst_i,				// Сигнал сброса
 	input				rxdv,				// Сигнал готовности данных
 	input  [3:0]	dat_i,			// Шина входных данных
 	output [7:0]	dat_o,			// Шина выходных данных
@@ -31,14 +31,14 @@ assign rxdv_o = rxdvn;
 assign rxer_o = wr_err;
 
 // Генерация нового синхросигнала
-always @(posedge rxclk_i, posedge rst)
-	if(rst)  rxclk_reg <= 1'b0;
+always @(posedge rxclk_i, posedge rst_i)
+	if(rst_i)  rxclk_reg <= 1'b0;
 	else     rxclk_reg <= rxclk_reg + 1'b1;
 
 
 // Чтение 2-х нибблов и запись в кольцевой буфер
-always @(posedge rxclk_i, posedge rst) begin
-	if(rst) begin
+always @(posedge rxclk_i, posedge rst_i) begin
+	if(rst_i) begin
 		eo <= 1'b0;
 		waddr <= 1'b0; wr_err <= 1'b0;
 	end
@@ -62,8 +62,8 @@ always @(posedge rxclk_i, posedge rst) begin
 end
 
 // Чтение кольцевого буфера
-always @(posedge rxclk_o, posedge rst) begin
-	if(rst) begin
+always @(posedge rxclk_o, posedge rst_i) begin
+	if(rst_i) begin
 		dato <= 8'o0; raddr <= 1'b0; rxdvn <= 1'b0;
 	end
 	else begin

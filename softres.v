@@ -11,7 +11,7 @@ module soft_reset(
 	output		reset_o		// Сигнал программного сброса
 );
 
-reg  [1:0]	reset_r;
+reg  [1:0]	reset_r = 2'b0;
 wire combrst = rst_i | reset_r[1];
 assign reset_o = reset_r[1];
 assign block_o = reset_r[0];
