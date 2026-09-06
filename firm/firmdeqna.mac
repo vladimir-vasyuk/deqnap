@@ -2,7 +2,7 @@
 ;
 ; Self test: after power reset MDCINI works incorrectly
 ;
-	.TITLE	DEQNA - DEQNA logic
+	.TITLE	DEQNA logic
 	.IDENT	/x01.00/
 
 	.SBTTL	Definitions
@@ -37,7 +37,7 @@ STATNM	= 1
 ; External registers
 ;
 LQABAS	= 24100	    ; Base address
-LQARLL	= LQABAS+4  ; Rx BD low ordera address bis
+LQARLL	= LQABAS+4  ; Rx BDL low order address bits
 LQARLH	= LQABAS+6  ; Rx BDL high order address bits
 LQATLL	= LQABAS+10 ; Tx BDL low order address bits
 LQATLH	= LQABAS+12 ; Tx BDL high order address bits
@@ -92,8 +92,8 @@ EMDVAL	= 24044     ; Ethernet MD input/output value
 ;--------------
 EMDCTR	= 24046     ; Ethernet MD control/status
 ; Write operation bits (control)
-;  6    : opearation (1/0 - write/read)
-;  5    : set to 1 to start opearation
+;  6    : operation (I/O - write/read)
+;  5    : set to 1 to start operation
 ;  4:0  : reg. address
 ; Read operation bits (status)
 ;  15   : 1/0 - ready/busy
@@ -104,8 +104,8 @@ EMDCTR	= 24046     ; Ethernet MD control/status
 ;  9    : receiver (1-ready; 0-not ready)
 ;  8    : link (1-yes; 0-no)
 ;  7    : reserved (0)
-;  6    : opearation (1/0 - write/read)
-;  5    : set to 1 to start opearation
+;  6    : operation (1/0 - write/read)
+;  5    : set to 1 to start operation
 ;  4:0  : reg. address
 ;--------------
 EGMOD	= 24050
@@ -208,7 +208,6 @@ NX.ERR	= BT.03	; NXM error
 BD.ERR	= BT.02	; Load BD ROM error
 RX.ERR	= BT.01	; Receive error
 TX.ERR	= BT.00	; Transmit error
-ER.FLG	= TX.ERR!RX.ERR!BD.ERR!NX.ERR!PH.ERR
 ;---------------------------------------------------------------------------
 ; Bits defined for BDL status
 RX.BDL	= BT.07	; New Rx BDL
@@ -234,10 +233,11 @@ ER.TXR	= BT.11	; General transmit error
 ER.CRS	= BT.12	; Loss of carrier error
 ER.RNT	= BT.13	; Runt error
 ER.CRC	= BT.14	; Receive CRC error
-ER.MAC	= BT.15	; Check MAC error
+ER.SHT	= BT.15	; Small frame error
 ET.NIL	= ET.STP!ET.EXL!ET.IEL
 ET.LOP	= ET.NIL!ET.INL
-ET.REI	= ER.MAC!ER.CRC!ER.RNT
+ET.REI	= ER.SHT!ER.CRC!ER.RNT
+;ET.REI	= ER.CRC!ER.RNT
 ;ER.RER	= ER.CRC!ER.RNT!ER.RXR
 ER.RER	= RS.1RE!RS.1DR!RS.1FE!RS.1CE
 ;---------------------------------------------------------------------------
@@ -345,13 +345,6 @@ START:
 10$:	BIS	#ET.STP,@#ECTST	; Set S-bit in the register
 	CALL	ETHTBP
 	BIC	#ET.STP,@#ECTST	; Clear S-bit in the register
-;.IF NE STATNM
-; Init statistic table
-;	MOV	#STERTB, R5
-;	MOV	#STNUM, R0
-;11$:	CLR	(R5)+
-;	SOB	R0, 11$
-;.ENDC
 ; Final initialization
 20$:	MOV	#32., @#DMATIM	; Set DMA timeout value
 	MOV	#BDLBAS, R1	; Initial BDL local address to R1
@@ -364,6 +357,9 @@ START:
 ;	BIC	#1, @#LQABAS	; Unblock external access to the bus
 .IF NE DBGINF
 	CLRB	DBGNUM
+.ENDC
+.IF NE STATNM
+	INC	STRSTN
 .ENDC
 ;
 	.SBTTL	- Main loop
@@ -419,7 +415,7 @@ TXL$:	MOV	TBDLL, 6(R2)	; Set to DMA address (low order bits)
 	ASL	R5		; ... value
 	BIT	#AD.L, 2(R1)	; Check for L-bit?
 	BEQ	3$		; No L-bit -- continue
-	INC	R5		; Retore multicast bit
+	INC	R5		; Restore multicast bit
 3$:	MOVB	R5, SETUPB	; Save copy to variable
 	BIC	#177, R5	; Leave only byte count
 	NEG	R5		; 2-S compl.
@@ -469,7 +465,10 @@ TXL$:	MOV	TBDLL, 6(R2)	; Set to DMA address (low order bits)
 	BEQ	16$
 	MOV	STW1, R4
 	BIS	#<TS.1GE!TS.1CE!TS.1AE>,R4 ; Set error bits
-	BISB	#TX.ERR, PRCFLG	; Set error flag
+.IF NE STATNM
+	INC	STTXER
+.ENDC
+
 	BR	22$
 16$:	NOP
 ;-----------------------------------------------
@@ -510,11 +509,11 @@ TXL$:	MOV	TBDLL, 6(R2)	; Set to DMA address (low order bits)
 	JMP	TXL$		; ... and loop
 ;-----------------------------------------------
 ; Carry is set, NXM error.
-28$:	BISB	#<TX.ERR!NX.ERR>,PRCFLG	; Set error flags
-	BIS	#<CS.NI!CS.XL!CS.RL!CS.XI>,@R3 ; Set NI-bit in the CSR
+28$:
 .IF NE STATNM
-	JMP	STATPR
+	INC	STTXER
 .ENDC
+	BIS	#<CS.NI!CS.XL!CS.RL!CS.XI>,@R3 ; Set NI-bit in the CSR
 ;
 ; Return
 32$:
@@ -532,7 +531,7 @@ RXP:	BIT	#CS.RI, @R3	; Stil in process?
 	JMP	RXF$		; RL=1 - abort processing
 ;-----------------------------------------------
 ; BDL regs preparation
-RXB$:	CLRB	LNGERR
+RXB$:	CLR	LNGERR
 	TSTB	PRCFLG		; New BDL?
 	BPL	2$		; No - skip initial
 	MOV	@#LQARLL, RBDLL	; Get initial Rx BDL low order address bits
@@ -569,7 +568,9 @@ RXB$:	CLRB	LNGERR
 ; Calculate number of words for DMA transfer
 6$:	MOV	R0, R5		; Store it for futher use
 	BNE	7$		; Number of received bytes is not zero - continue
-	BISB	#RX.ERR, PRCFLG	; Zero - set error flag, ...
+.IF NE STATNM
+	INC	STZRPL
+.ENDC
 	JMP	RXF$		; ... jump to finish
 7$:	BIT	#BT.00, R5	; Is it even?
 	BEQ	8$		; Yes - continue
@@ -579,31 +580,35 @@ RXB$:	CLRB	LNGERR
 ;-----------------------------------------------
 ; Process errors and prepare status words template
 	CLR	R5		; Prepare template
-	BIT	#<ER.MAC!ER.RNT>,R4 ; Address match error or RUNT error?
+;	BIT	#<ER.MAC!ER.RNT>,R4 ; Address match error or RUNT error?
+	BIT	#ER.RNT,R4	; Address match error or RUNT error?
 	BEQ	9$		; No - br to continue
 	MOV	#RS.1RE, R5	; Yes - set RUNT bit
+.IF NE STATNM
+	INC	STRNTN
+.ENDC
 ; Giant frame proc...
-9$:	CMP	R0, #EPMAXS	; Is frame size is less or equal than max?
+9$:	CMP	R0, #EPMAXS	; Is frame size less than or equal to max?
 	BLE	11$		; Yes - br to small frame proc.
 	BIT	#ET.LOP, R4	; No - is it loopback?
-	BNE	12$		; Yes - skip small frame proc.
-	MOV	#200, LNGERR	; No - set error bit and ...
+	BNE	11$		; Yes - skip small frame proc.
+	MOVB	#200, LNGERR	; No - set error bit and ...
 .IF NE STATNM
-	INC	STGFER
+	INC	STGFN
 .ENDC
-	BR	12$		; ... skip small frame proc
 ; Small frame proc...
-11$:	CMP	R0, #EPMINS	; Continue proc. if size is ...
-	BGE	12$		; ... GE than min
-	BIT	#ET.INL, R4	; Loopback?
-	BNE	12$		; Yes - br to continue
-	BIS	#RS.1RE, R4	; No - set error bit
+11$:	BIT	#ER.SHT, R4	; Is it short frame?
+	BEQ	12$		; No - continue
+	MOVB	#200, SHTERR
 .IF NE STATNM
-	INC	STSFER
+	INC	STSFN
 .ENDC
 12$:	BIT	#ER.CRC, R4	; Did we get CRC error?
 	BEQ	16$		; No - continue
 	BIS	#<RS.1DR!RS.1CE>,R5 ; Yes - set error bits
+.IF NE STATNM
+	INC	STCRER
+.ENDC
 16$:	BIT	#ET.LOP, R4	; Loopback packet?
 	BNE	17$		; Yes - br to process loopback
 	SUB	#60., R0	; No - modify byte count ...
@@ -630,13 +635,13 @@ RXL$:	MOV	DATWCN, R4	; Data size in words to R4
 				; ... DMA data buffer size
 	BLE	4$
 ;
-; Size of received data is greater then DMA data buffer size
+; Size of received data is greater than DMA data buffer size
 	MOV	R4, DATWCN	; Store size of the reminder for the futher step(s)
 	MOV	WCOUNT, R5	; Use WCOUNT for DMA operation ...
 	MOV	R5, 2(R2)	; ... and write it to the DMA register
 	BR	5$		;
 ;
-; Size of received data is less then (or equal to) DMA data buffer size
+; Size of received data is less than (or equal to)... DMA data buffer size
 4$:	MOV	DATWCN, R5	; Word counter
 	NEG	R5		; 2's compl.
 	MOV	R5, 2(R2)	; Set DMA word counter register
@@ -690,11 +695,11 @@ RXL$:	MOV	DATWCN, R4	; Data size in words to R4
 	BR	RXF$
 ;-----------------------------------------------
 ; Carry is set NXM error
-RER$:	BISB	#<RX.ERR!NX.ERR>,PRCFLG	; Set error flags
-	BIS	#<CS.NI!CS.XL!CS.RL!CS.XI>,@R3 ; Set NI-bit in the CSR
+RER$:
 .IF NE STATNM
-	JMP	STATPR
+	INC	STRXER
 .ENDC
+	BIS	#<CS.NI!CS.XL!CS.RL!CS.XI>,@R3 ; Set NI-bit in the CSR
 ;
 ; Return
 RXF$:	RETURN
@@ -801,11 +806,11 @@ PBDLC$:	MOV	RBDLL, 6(R2)	; Set to DMA address (low order bits)
 	BR	PBDLC$		; ... and loop
 ;-----------------------------------------------
 ; Carry is set NXM error
-100$:	BISB	#<BD.ERR!NX.ERR>,PRCFLG	; Set error flags
-	BIS	#<CS.NI!CS.XL!CS.RL!CS.XI>,@R3 ; Set NI-bit in the
+100$:
 .IF NE STATNM
-	JMP	STATPR
+	INC	STBDER
 .ENDC
+	BIS	#<CS.NI!CS.XL!CS.RL!CS.XI>,@R3 ; Set NI-bit in the CSR
 ;
 PBDEX$:	RETURN
 ;
@@ -815,7 +820,7 @@ PBDEX$:	RETURN
 ; Input:  R0 = Address of the BDLL buffer (used for chain op)
 ; Output: R4 - Word count
 ;
-GETBDL:	BICB	#ER.FLG, PRCFLG	; Clear error bits
+GETBDL:
 1$:	CLR	16(R1)		; Init local address register
 	MOV	#BD.BFS, 4(R2)	; Select BDL for DMA operation
 	MOV	#-1, 2(R2)	; Process 1 word
@@ -826,25 +831,30 @@ GETBDL:	BICB	#ER.FLG, PRCFLG	; Clear error bits
 2$:	MOV	#-3, 2(R2)	; Process 3 words
 	CALL	DMASWR		; DMA write operation
 	MOV	#0, 4(R2)	; Deselect DMA device (DO NOT TOUCH Carry)
-	BCS	4$		; Return if error
+.IF NE STATNM
+	BCC	3$
+	INC	STBDLE
+	BR	5$
+.IFF
+	BCS	5$		; Return if error
+.ENDC
 ;
 ; Get and store BDL data
-	MOV	2(R1), 10(R2)	; Store high order address bits
+3$:	MOV	2(R1), 10(R2)	; Store high order address bits
 	MOV	4(R1), 6(R2)	; Store low order address bits
 ;
 ; Process C-bit
 	BIT	#AD.C, 2(R1)	; Check chain bit
-	BEQ	3$		; No bit - continue
+	BEQ	4$		; No bit - continue
 	MOV	2(R1), 2(R0)	; Save copy of the high order address bits
 	MOV	4(R1), (R0)	; Save copy of the low order address bits
 	BR	1$		; Continue from the beginning
 ;
 ; Finalize operation
-3$:	MOV	6(R1), R4	; Get buffer's word count
+4$:	MOV	6(R1), R4	; Get buffer's word count
 	MOV	R4, 2(R2)	; Store word count for futher DMA operations
 	MOV	R4, WCOUNT	; Save copy
-4$:
-	RETURN
+5$:	RETURN
 ;
 	.SBTTL	- DMA processing
 ;===========================================================================
@@ -861,13 +871,16 @@ DMAC$:	CLC			; Clear carry
 	BEQ	1$		; Not yet - loop
 	BIT	#DM.NXM,@R2	; NXM error?
 	BEQ	2$		; No - normal exit
+.IF NE STATNM
+	INC	STNXER
+.ENDC
 	SEC			; Yes - set carry
 2$:	BIC	#<DM.RDO!DM.WRO>,@R2 ; Clear operation bits
 	RETURN
 ;
 	.SBTTL	- Status words processing
 ;===========================================================================
-; R0 = addres of the BDLL buffer
+; R0 = address of the BDLL buffer
 ; R4 = first status word
 ; R5 = second status word
 ;
@@ -939,6 +952,9 @@ SPACK:	MOV	R0, -(SP)
 	MOV	(SP)+, R2
 	MOV	(SP)+, R1
 	MOV	(SP)+, R0
+.IF NE STATNM
+	INC	STSTPN
+.ENDC
 	RETURN
 ;
 	.SBTTL	- Populate ethernet filter table
@@ -965,7 +981,7 @@ ETHTAB:	MOV	#MACTAB, MTADR
 ;
 	INC	MTADR		; Shift memory address
 	SOB	R4, 12$		; Loop over the number of bytes ...
-				; ... in the addess
+				; ... in the address
 	INC	R2		; Next memory byte address
 	MOV	R2, MTADR
 ; Loop to skip empty data block
@@ -1015,6 +1031,9 @@ ETHTBP:	MOV	#14., R0	; MACs counter
 	CLC			; Indicate success
 	RETURN
 3$:	BIS	#EA.LED,@#EGMOD	; Light on all leds
+.IF NE STATNM
+	INC	STEMER
+.ENDC
 	SEC			; Indicate error
 .IFF
 	CLC
@@ -1032,10 +1051,10 @@ SNTRES:
 .IF NE ETHINI
 	.SBTTL	- Init ethernet transceiver
 ;===========================================================================
-; Install one of the working mode.
+; Install one of the working modes.
 ; Return:
-;    Carry is cleared	- no error>, working mode is set
-;    Cary is set	- error, couuld not set working mode
+;    Carry is cleared	- no error, working mode is set
+;    Carry is set	- error, could not set working mode
 ;
 MDCINI:
 ;	CALL	MDSDLY
@@ -1062,6 +1081,9 @@ MDCINI:
 	SOB	R5, 1$		; If not - loop over all init values
 6$:	BIC	#<EA.LD3!EA.LD2>,@#EGMOD ; Turn off/on ...
 	BIS	#EA.LD1,@#EGMOD	; ... correct LEDs
+.IF NE STATNM
+	INC	STPHER
+.ENDC
 	SEC			; Set error flag
 	TST	(PC)+
 8$:	CLC			; Clear carry (normal return)
@@ -1106,8 +1128,10 @@ MDWAIT:	MOV	R1, -(SP)
 	BEQ	3$		; Condition met, br to normal return
 2$:	CMPB	R0, TTICK	; Timeout?
 	BNE	1$		; No - loop
-	BISB	#PH.ERR, PRCFLG	; Yes - set error flag ...
-	SEC			; ... and carry
+.IF NE STATNM
+	INC	STPHER
+.ENDC
+	SEC			; Yes - set error flag
 	TST	(PC)+
 3$:	CLC			; Clear carry
 	MOV	(SP)+, R1
@@ -1134,7 +1158,11 @@ MDRST:	MOV	R5, -(SP)
 	TST	@#EMDVAL	; Check BMCR.15
 	BPL	3$		; If 0 - br to normal return, ...
 	SOB	R5, 1$		; ... else loop
-2$:	SEC			; Set error flag...
+2$:
+.IF NE STATNM
+	INC	STPHER
+.ENDC
+	SEC			; Set error flag...
 	TST	(PC)+		; ... and return
 3$:	CLC			; Clear error flag ...
 	MOV	(SP)+, R5	; ... and return
@@ -1144,18 +1172,6 @@ MDRST:	MOV	R5, -(SP)
 ; Delay 1 seconds
 ;
 DELAY:
-;	MOV	R1, -(SP)
-;	MOVB	TTICK, R0
-;	MOVB	TSEC, R1
-;	ADD	#1, R1
-;	CMP	#60., R1
-;	BPL	1$
-;	SUB	#60., R1
-;1$:	CMPB	R1, TSEC
-;	BNE	1$
-;2$:	CMPB	R0, TTICK
-;	BNE	2$
-;	MOV	(SP)+, R1
 	MOVB	TTICK, R0	; Store current tick value
 	ADD	#30., R0	; Add delay
 	CMP	#60., R0	; More than 60?
@@ -1183,22 +1199,6 @@ DBGWRT:
 	MOV	#DBGDAT, R5	; Yes - beginning of the buffer to R0
 1$:	MOV	R5, DBGCAD	; R0 to the current address
 	MOV	(SP)+, R5
-	RETURN
-.ENDC
-.IF NE STATNM
-;
-	.SBTTL	- Store statistic information
-;===========================================================================
-;
-STATPR:	MOV	#STERTB, R5
-	MOV	#PRCFLG, R4
-	MOV	#STNUM, R0
-	SUB	#2, R0
-1$:	RORB	R4
-	BCC	2$
-	INC	(R5)
-2$:	TST	(R5)+
-	SOB	R0, 1$
 	RETURN
 .ENDC
 ;
@@ -1292,27 +1292,33 @@ LEDS:	.BYTE	0	; Leds - 000
 	.BYTE	4	; Leds - 100
 ;-----------------------------------------------
 ; Flags
-PRCFLG:	.BYTE	0	; Error flags
-			; BT.07 - New Rx BDL
+PRCFLG:	.BYTE	0	; BT.07 - New Rx BDL
 			; BT.06 - New Tx BDL
-			; BT.04 - Phy error
-			; BT.03	- NXM error
-			; BT.02	- BDROM error
-			; BT.01	- Receive error
-			; BT.00	- Transmit error
+			; BT.04 - Unused
+			; BT.03	- Unused
+			; BT.02	- Unused
+			; BT.01	- Unused
+			; BT.00	- Unused
+	.EVEN
 LNGERR:	.BYTE	0
+SHTERR:	.BYTE	0
 .IF NE STATNM
 ;-----------------------------------------------
 ;
-STERTB:
-STTXER:	.WORD	0	; Transmit errors number
-STRXER:	.WORD	0	; Receive errors number
+STTXER:	.WORD	0	; Transmit errors
+STRXER:	.WORD	0	; Receive errors
 STBDER:	.WORD	0	; Load BD ROM error
-STNXER:	.WORD	0	; NXM errors number
+STNXER:	.WORD	0	; NXM errors
+STBDLE:	.WORD	0	; BDL errors
+STEMER:	.WORD	0	; MACtab check errors
 STPHER:	.WORD	0	; Phy error
-STGFER:	.WORD	0	; Giant frames number
-STSFER:	.WORD	0	; Small frames number
-STNUM	= <.-STERTB>/2
+STCRER:	.WORD	0	; CRC errors
+STZRPL:	.WORD	0	; Zero length frames
+STGFN:	.WORD	0	; Giant frames
+STSFN:	.WORD	0	; Small frames
+STRNTN:	.WORD	0	; Runt frames
+STSTPN:	.WORD	0	; Setup packets
+STRSTN:	.WORD	0	; Resets
 .ENDC
 ;-----------------------------------------------
 ; Timer counters
