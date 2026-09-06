@@ -41,8 +41,10 @@ always @(negedge txclk_o, posedge rst_i) begin
 	else if(txen_i) begin
 		txbufd[waddr][7:0] <= dat_i;
 		if(~wr_err) begin					// Ошибка?
-			if(waddr != raddrl)			// Нет. Конец буфера?
+			if(waddr != raddrl) begin  // Нет. Конец буфера?
 				waddr <= waddr + 1'b1;	// Нет - инкремент
+            wr_err <= 1'b0;
+         end
 			else
 				wr_err <= 1'b1;			// Конец буфера, установить сигнал ошибки
 		end
@@ -52,7 +54,7 @@ end
 always @(negedge txclk_i, posedge rst_i) begin
 	if(rst_i) begin
 		eo <= 1'b0; txen_o <= 1'b0;
-		raddr <= 2'b0; dato <= 4'o0;
+		raddr <= 2'b0; dato <= 4'b0;
 	end
 	else begin
 		if(raddr != waddr) begin		// Конец данных?

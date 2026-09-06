@@ -50,8 +50,10 @@ always @(posedge rxclk_i, posedge rst_i) begin
 			else begin								// Нечет
 				rxbufd[waddr][7:0] <= {dat_i[3:0],lsb[3:0]}; // Запись в кольцевой буфер
 				if(~wr_err) begin					// Ошибка?
-					if(waddr != raddrl)			// Нет. Конец буфера?
+					if(waddr != raddrl) begin  // Нет. Конец буфера?
 						waddr <= waddr + 1'b1;	// Нет - инкремент
+                  wr_err <= 1'b0;
+               end
 					else
 						wr_err <= 1'b1;			// Конец буфера, установить сигнал ошибки
 				end
@@ -64,7 +66,7 @@ end
 // Чтение кольцевого буфера
 always @(posedge rxclk_o, posedge rst_i) begin
 	if(rst_i) begin
-		dato <= 8'o0; raddr <= 1'b0; rxdvn <= 1'b0;
+		dato <= 8'b0; raddr <= 1'b0; rxdvn <= 1'b0;
 	end
 	else begin
 		if(raddr != waddr) begin				// Конец буфера?

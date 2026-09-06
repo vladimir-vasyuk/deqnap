@@ -2,6 +2,10 @@
 // Реализация контроллера Ethernet DEQNA/DELQA под управлением процессором М4 (LSI-11M)
 // Основной модуль
 //=================================================================================
+
+//`define md_debug         // Отладка MD
+`define rx_single_frame  //  Прием по одному кадру
+
 module deqnap(
    input          wb_clkp_i,  // тактовая частота шины		wb_clk
    input          wb_clkn_i,  // обратная тактовая
@@ -34,12 +38,12 @@ module deqnap(
    input          e_rxc,      // Receive clock
    input          e_rxdv,     // Receive data valid
    input          e_rxer,     // Receive error
-   input  [7:0]   e_rxd,      // Receive data
+   input  [3:0]   e_rxd,      // Receive data
    input          e_crs,      // Carrier sense
    input          e_txc,      // Transmit clock
    output         e_txen,     // Tramsmit enable
    output         e_txer,     // Tramsmit error
-   output [7:0]   e_txd,      // Transmit data
+   output [3:0]   e_txd,      // Transmit data
    output         e_rst,      // Hardware reset, active low
    output         e_mdc,      // MDC clock
    inout          e_mdio,     // MD line
@@ -63,7 +67,7 @@ wire [9:0]  erxaddr;		// Регистр адреса блока приема (et
 wire [15:0] etxdbus;		// Шина данных блока передачи (память -> ether модуль)
 wire [15:0] mtxdbus;		// Шина данных блока приема (DMA -> память)
 wire [15:0]	mrxdat;		// Шина данных блока приема (память -> DMA)
-wire [15:0] erxdbus;		// Шина данных блока приема (ether модуль -> память)
+wire [7:0]  erxdbus;		// Шина данных блока приема (ether модуль -> память)
 //
 wire			comb_res;	// Сигнал комбинированного сброса
 wire [2:0]	indic;		// Сигналы индикации
@@ -80,6 +84,7 @@ rxbuf mrxbuf(
 	.wb_dat_o(lrxb_dat),
 	.wb_cyc_i(lwb_cyc),
    .wb_we_i(lwb_we),
+   .wb_sel_i(lwb_sel),
 	.wb_stb_i(lrxb_stb),
 	.wb_ack_o(lrxb_ack),
 	.dma_stb_i(dma_rxb),
@@ -91,7 +96,8 @@ rxbuf mrxbuf(
    .eth_cnt_i(rxcntbf),
 	.eth_dwe_i(erdatwe),
    .eth_cwe_i(ercnfwe),
-   .eth_ncsr_i(nocsr),
+   .eth_crc_i(skpcrc),
+   .eth_fls_i(flashd),
    .dat_rdy_o(rx_dat_rdy),
    .cnt_rdy_o(rx_cnt_rdy),
    .fifo_wen_o(rxfifo_wena)
@@ -137,6 +143,7 @@ assign ldibus = (dma_bdl ? bdl_dat : 16'o000000)
 wire        dma_rerr;      // Ошибка данных операции чтения
 wire        dma_werr;      // Ошибка данных операции записи
 assign dma_rerr = (dma_rxb ? ~rx_dat_rdy : 1'b0);
+//assign dma_rerr = 1'b0;
 assign dma_werr = (dma_txb ? ~txfifo_wena : 1'b0);
 
 // Сигнал записи по каналу ПДП/DMA
@@ -193,7 +200,8 @@ wire [47:0]	mac_data;	// MAC адрес принятого кадра
 wire			cmp_done;	// Операция сравнения завершена
 wire			cmp_res;		// Результат операции сравнения
 wire [2:0]	epms;			// Режим прослушивания/установки
-wire        nocsr;
+wire        skpcrc;     // Пропустить 4 байтв CRC
+wire        flashd;     // Сигнал очистки текущих данных
 
 ether etherm(
    .rst_i(ereset),
@@ -210,7 +218,8 @@ ether etherm(
    .rxclkb_o(rxclkb),
    .txclkb_o(txclkb),
 	.stserrs_o(estse),
-   .enocsr_o(nocsr),
+   .skipcrc_o(skpcrc),
+   .flashd_o(flashd),
    .e_rxc(e_rxc),
    .e_rxdv(e_rxdv),
    .e_rxer(e_rxer),

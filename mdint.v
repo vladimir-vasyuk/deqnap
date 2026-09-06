@@ -7,7 +7,7 @@
 //     ready signal rdy is de-asserted -- otherwise an infinite loop occurs
 //=================================================================================
 module mdint(
-   input          clk_i,		// Clock signal, minimum period 400 ns
+   input          mdc_i,		// Clock signal, minimum period 400 ns
    input          rst_i,      // Reset signal
    input          evt_i,      // Periodic status poll event signal
    inout          mdiol,		// Data link
@@ -48,7 +48,7 @@ reg [2:0]   state = IDLE;
 reg         proc_status = 1'b0;
 reg         evt_sp = 1'b0;
 
-always @(posedge clk_i or posedge rst_i) begin
+always @(posedge mdc_i or posedge rst_i) begin
    if(rst_i) begin
       start <= 1'b0; rw <= 1'b0; rdy <=1'b0;
       proc_status <= 1'b0; datout <= 16'b0;
@@ -119,7 +119,7 @@ end
 //////////////////////////////////////////////
 
 mdio mdiom(
-   .mdc_i(clk_i),
+   .mdc_i(mdc_i),
    .rst_i(rst_i),
    .phyadr_i(phy),
    .regadr_i(md_addr),
@@ -139,8 +139,8 @@ endmodule
 module mdc(
    input       clk_i,      // 50 MHz clock
    input       rst_i,      // Reset signal
-   output      mdcclk_o,   // MD clock (T=440ns)
-   output      mdsevt_o    // MD periodic event (T~1.85sec)
+   output      mdcclk_o,   // MD clock (T=400ns)
+   output      mdsevt_o    // MD periodic event (T~1.7sec)
 );
 
 reg        mdcclk;

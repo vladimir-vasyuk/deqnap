@@ -65,15 +65,14 @@ assign wstart = dma_op[1];
 assign rstart = dma_op[0];
 
 // конечный автомат контроллера DMA
-localparam[3:0] dma_idle = 0; 
-localparam[3:0] dma_read_prep = 1;
-localparam[3:0] dma_read = 2;
-localparam[3:0] dma_read_next = 3;
-localparam[3:0] dma_read_done = 4;
-localparam[3:0] dma_write_prep = 5; 
-localparam[3:0] dma_write = 6;
-localparam[3:0] dma_write_next = 7;
-localparam[3:0] dma_write_done = 8;
+localparam[3:0] dma_idle       = 4'd0;
+localparam[3:0] dma_read_prep  = 4'd1;
+localparam[3:0] dma_read       = 4'd2;
+localparam[3:0] dma_read_next  = 4'd3;
+localparam[3:0] dma_write_prep = 4'd4; 
+localparam[3:0] dma_write      = 4'd5;
+localparam[3:0] dma_write_next = 4'd6;
+localparam[3:0] dma_done       = 4'd7;
 reg  [3:0]	dma_state;
 
 // Сигналы упраления обменом с шиной
@@ -194,7 +193,7 @@ always @(posedge clk_i, posedge rst_i)  begin
                nxm <= 1'b1;										// флаг ошибки DMA
                dma_we <= 1'b0;
                dma_stb <= 1'b0;									// снимаем строб транзакции
-               dma_state <= dma_read_done;					// завершаем чтение
+               dma_state <= dma_done;                    // завершаем чтение
             end
             else if (dma_ack_i == 1'b1) begin
                dma_stb <= 1'b0;									// снимаем строб транзакции
@@ -211,18 +210,7 @@ always @(posedge clk_i, posedge rst_i)  begin
             if (|data_index != 0)								// все записано?
                dma_state <= dma_read_prep;					// нет - продолжаем
             else
-               dma_state <= dma_read_done;					// да - завершаем
-         end
-
-         // чтение данных - завершение
-         dma_read_done: begin
-            dma_req <= 1'b0;										// освобождаем шину
-            if (rstart == 1'b0) begin
-               dma_state <= dma_idle;							// переходим в состояние ожидания команды
-               iocomplete <= 1'b0;								// снимаем подтверждение окончания обмена
-            end
-            else
-               iocomplete <= 1'b1;								// подтверждаем окончание обмена
+               dma_state <= dma_done;                    // да - завершаем
          end
 
          // запись данных - подготовка шины к DMA
@@ -241,7 +229,7 @@ always @(posedge clk_i, posedge rst_i)  begin
                nxm <= 1'b1;										// флаг ошибки DMA
                dma_we <= 1'b0;
                dma_stb <= 1'b0;									// снимаем строб транзакции
-               dma_state <= dma_write_done;					// завершаем запись
+               dma_state <= dma_done;                    // завершаем запись
             end
             else if (dma_ack_i == 1'b1) begin
                dma_we <= 1'b0;
@@ -259,13 +247,12 @@ always @(posedge clk_i, posedge rst_i)  begin
             if (|data_index != 0)								// все записано?
                dma_state <= dma_write_prep;					// нет - продолжаем
             else
-               dma_state <= dma_write_done;					// да - завершаем
+               dma_state <= dma_done;                    // да - завершаем
          end
 
-         // запись данных - завершение
-         dma_write_done: begin
+         dma_done: begin
             dma_req <= 1'b0;										// освобождаем шину
-            if (wstart == 1'b0)  begin
+            if ((wstart || rstart) == 1'b0)  begin
                iocomplete <= 1'b0;								// снимаем подтверждение окончания обмена
                dma_state <= dma_idle;							// переходим в состояние ожидания команды
             end
@@ -276,3 +263,129 @@ always @(posedge clk_i, posedge rst_i)  begin
 end
 
 endmodule
+/*
+One thing worth flagging before the diff, since it matters for correctness of the fold: 
+ma_read_prep and dma_write_prep aren't actually symmetric in the current code —
+
+dma_read_prep:  dma_stb <= 1'b0;   // clears stb
+dma_write_prep: dma_stb <= 1'b1;   // asserts stb, one cycle early
+
+The read path clears dma_stb in _prep, then dma_read's own body re-asserts it — meaning 
+ma_stb doesn't actually go high until the second cycle spent in dma_read. The write 
+ath pre-asserts dma_stb in _prep, so it's already high from the very first cycle in 
+ma_write. I don't know if that asymmetry is deliberate (some real timing requirement 
+n the write side) or an oversight — either way, my fold below preserves it exactly as-is,
+since changing it wasn't part of what you asked for. Worth a separate look if it turns
+out not to be intentional.
+
+   // конечный автомат контроллера DMA
+   localparam[3:0] dma_idle       = 4'd0;
+   localparam[3:0] dma_read       = 4'd1;
+   localparam[3:0] dma_read_next  = 4'd2;
+   localparam[3:0] dma_write      = 4'd3;
+   localparam[3:0] dma_write_next = 4'd4;
+   localparam[3:0] dma_done       = 4'd5;
+   reg  [3:0]	dma_state;
+
+      case (dma_state)
+         // ожидание запроса
+         dma_idle: begin
+            nxm <= 1'b0;
+            dma_we <= 1'b0;
+            dma_inc_ladr <= 1'b0;
+            data_index <= dma_wcount;
+
+            // старт процедуры записи
+            if (wstart == 1'b1) begin
+               dma_req <= 1'b1;
+               if (dma_gnt_i == 1'b1) begin
+                  dma_stb <= 1'b1;                  // (было dma_write_prep)
+                  bus_wait <= ibus_wait;             // (было dma_write_prep)
+                  dma_state <= dma_write;
+               end
+            end
+
+            // старт процедуры чтения
+            else if (rstart == 1'b1) begin
+               dma_req <= 1'b1;
+               if (dma_gnt_i == 1'b1) begin
+                  dma_stb <= 1'b0;                  // (было dma_read_prep)
+                  bus_wait <= ibus_wait;             // (было dma_read_prep)
+                  dma_state <= dma_read;
+               end
+            end
+            else iocomplete <= 1'b0;
+         end
+
+         dma_read: begin
+            dma_dat <= lbdata_i;
+            dma_we <= 1'b1;
+            dma_stb <= 1'b1;
+            bus_wait <= bus_wait - 1'b1;
+            if ((|bus_wait == 0) | dma_rerr_i) begin
+               nxm <= 1'b1;
+               dma_we <= 1'b0;
+               dma_stb <= 1'b0;
+               dma_state <= dma_done;
+            end
+            else if (dma_ack_i == 1'b1) begin
+               dma_stb <= 1'b0;
+               data_index <= data_index + 1'b1;
+               dma_we <= 1'b0;
+               dma_inc_ladr <= 1'b1;
+               dma_state <= dma_read_next;
+            end
+         end
+
+         dma_read_next: begin
+            dma_haddr <= dma_haddr + 1'b1;
+            dma_inc_ladr <= 1'b0;
+            if (|data_index != 0) begin
+               dma_stb <= 1'b0;                  // (было dma_read_prep)
+               bus_wait <= ibus_wait;             // (было dma_read_prep)
+               dma_state <= dma_read;
+            end
+            else
+               dma_state <= dma_done;
+         end
+
+         dma_write: begin
+            bus_wait <= bus_wait - 1'b1;
+            lbdata <= dma_dat_i;
+            if ((|bus_wait == 0) | dma_werr_i) begin
+               nxm <= 1'b1;
+               dma_we <= 1'b0;
+               dma_stb <= 1'b0;
+               dma_state <= dma_done;
+            end
+            else if (dma_ack_i == 1'b1) begin
+               dma_we <= 1'b0;
+               dma_stb <= 1'b0;
+               data_index <= data_index + 1'b1;
+               dma_inc_ladr <= 1'b1;
+               dma_state <= dma_write_next;
+            end
+         end
+
+         dma_write_next: begin
+            dma_haddr <= dma_haddr + 1'b1;
+            dma_inc_ladr <= 1'b0;
+            if (|data_index != 0) begin
+               dma_stb <= 1'b1;                  // (было dma_write_prep)
+               bus_wait <= ibus_wait;             // (было dma_write_prep)
+               dma_state <= dma_write;
+            end
+            else
+               dma_state <= dma_done;
+         end
+
+         dma_done: begin
+            dma_req <= 1'b0;
+            if ((wstart || rstart) == 1'b0) begin
+               iocomplete <= 1'b0;
+               dma_state <= dma_idle;
+            end
+            else iocomplete <= 1'b1;
+         end
+      endcase
+*/

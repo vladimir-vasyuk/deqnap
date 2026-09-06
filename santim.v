@@ -16,7 +16,7 @@ reg  [3:0]	bdcok_cnt = 4'b0;
 localparam	BDCOK_LIMIT = 10;
 assign out_o = rbdcok;
 
-// Генерация отрицательного BDCOK ~4 msec.
+// Генерация отрицательного BDCOK ~4 мкс.
 always @(posedge clock_i) begin
 	if(gen_i) begin
 		if(bdcok_cnt != BDCOK_LIMIT) begin
