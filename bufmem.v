@@ -148,27 +148,29 @@ endmodule
 //=================================================================================
 module rxbuf(
 // Domain WB
-	input          wb_clk_i,   // clock
+   input          wb_clk_i,   // clock
    input          wb_rst_i,   // reset
    input  [1:0]   wb_adr_i,	// module address
    input  [15:0]  wb_dat_i,   // input data
-	output [15:0]  wb_dat_o,   // output data
-	input          wb_cyc_i,   // cycle signal
+   output [15:0]  wb_dat_o,   // output data
+   input          wb_cyc_i,   // cycle signal
    input          wb_we_i,    // [1]=write, [0]=read
-	input          wb_stb_i,   // strobe  signal
-	output         wb_ack_o,   // acknowledge signal
+   input  [1:0]   wb_sel_i,   // byte select for write
+   input          wb_stb_i,   // strobe  signal
+   output         wb_ack_o,   // acknowledge signal
 // DMA (Domain WB)
-	input          dma_stb_i,  // strobe
+   input          dma_stb_i,  // strobe
    input          dma_inca_i, // address register increment
-	output [15:0]  dma_dat_o,  // output data
+   output [15:0]  dma_dat_o,  // output data
 // Domain Ethernet
    input          eth_clk_i,  // clock
    input          eth_rst_i,  // reset
-	input	 [15:0]  eth_dat_i,  // input data
+   input	 [7:0]   eth_dat_i,  // input data
    input	 [15:0]  eth_cnt_i,  // input byte counter & flags
-	input          eth_dwe_i,  // FIFO write enable
+   input          eth_dwe_i,  // FIFO write enable
    input          eth_cwe_i,  // FIFOcntf write enable
-   input          eth_ncsr_i,
+   input          eth_crc_i,  // skip CSR bytes
+   input          eth_fls_i,  // flash current frame
 // State signals
    output         dat_rdy_o,  // FIFO is not empty
    output         cnt_rdy_o,  // FIFOcntf is not empty
@@ -176,46 +178,58 @@ module rxbuf(
 );
 
 // Write pointer: binary, gray, write address, wfull
-reg  [11:0] wptr_bin,  wptr_gray;
+reg  [12:0] wptr_bin,  wptr_bin_pre, wptr_gray;
 reg  wfull;
-wire [11:0] wptr_bin_next, wptr_gray_next;
-wire [10:0] waddr = wptr_bin[10:0];
-assign wptr_bin_next  = wptr_bin + eth_we;
+wire [12:0] wptr_bin_adv, wptr_bin_next, wptr_gray_next;
+wire [11:0] waddr = wptr_bin[11:0];
+assign wptr_bin_adv   = wptr_bin + eth_we;
+assign wptr_bin_next  = eth_crc_i ? (wptr_bin - 13'd4) :
+                        eth_fls_i ? wptr_bin_pre : wptr_bin_adv;
 assign wptr_gray_next = wptr_bin_next ^ (wptr_bin_next >> 1);
 
 // Read pointer: binary, gray, read address, rempty
-reg  [11:0] rptr_bin,  rptr_gray;
+reg  [12:0] rptr_bin,  rptr_gray, rptr_bin_next;
 reg  rempty;
-wire [11:0] rptr_bin_next, rptr_gray_next;
-wire [10:0] raddr = rptr_bin[10:0];
-assign rptr_bin_next  = rptr_bin + (r_en & ~rempty);
+wire [12:0] rptr_bin_adv, rptr_gray_next;
+wire [10:0] raddr = rptr_bin[11:1];
+assign rptr_bin_adv  = rptr_bin + ((r_en & ~rempty) ? 13'd2 : 13'd0);
+
+// Restore/assign read next pointer
+always @(*) begin
+   if(bus_write_req & (wb_adr_i[1:0] == 2'b01)) begin
+      rptr_bin_next[12:8] = wb_sel_i[1] ? wb_dat_i[12:8] : rptr_bin[12:8];
+      rptr_bin_next[7:0]  = wb_sel_i[0] ? wb_dat_i[7:0]  : rptr_bin[7:0];
+   end
+   else
+      rptr_bin_next = rptr_bin_adv;
+end
 assign rptr_gray_next = rptr_bin_next ^ (rptr_bin_next >> 1);
 
 // *** Gray‑pointers synchro ***
-// read pointer for write‑domain
-reg [11:0] g_rptr_sync1, g_rptr_sync2;
+// read pointer for Ether‑domain
+reg [12:0] g_rptr_sync1, g_rptr_sync2;
 always @(posedge eth_clk_i, posedge eth_rst_i) begin
    if(eth_rst_i) begin
-      g_rptr_sync1 <= 12'b0;
-      g_rptr_sync2 <= 12'b0;
+      g_rptr_sync1 <= 13'b0;
+      g_rptr_sync2 <= 13'b0;
    end else begin
       g_rptr_sync1 <= rptr_gray;
       g_rptr_sync2 <= g_rptr_sync1;
    end
 end
 
-// write pointer for read‑domain
-reg [11:0] g_wptr_sync1, g_wptr_sync2;
+// write pointer for WB‑domain
+reg [12:0] g_wptr_sync1, g_wptr_sync2;
 always @(posedge wb_clk_i, posedge wb_rst_i) begin
    if(wb_rst_i) begin
-      g_wptr_sync1 <= 12'b0;
-      g_wptr_sync2 <= 12'b0;
+      g_wptr_sync1 <= 13'b0;
+      g_wptr_sync2 <= 13'b0;
    end else begin
       g_wptr_sync1 <= wptr_gray;
       g_wptr_sync2 <= g_wptr_sync1;
    end
 end
-// *****************************
+// *********************************
 
 // *** rempty & wfull generation ***
 wire rempty_next;
@@ -229,8 +243,8 @@ always @(posedge wb_clk_i, posedge wb_rst_i) begin
 end
 
 wire wfull_next;
-assign wfull_next = (wptr_gray_next == {~g_rptr_sync2[11:10],
-                     g_rptr_sync2[9:0]});
+assign wfull_next = (wptr_gray_next == {~g_rptr_sync2[12:11],
+                     g_rptr_sync2[10:0]});
 always @(posedge eth_clk_i, posedge eth_rst_i) begin
    if(eth_rst_i)
       wfull <= 1'b0;
@@ -258,39 +272,65 @@ wire [15:0] cnt_data;      // FIFOcntf output data
 assign wb_dat_o = data;
 assign dma_dat_o = buf_data;
 
-wire cnt_wf, cnt_re;                   // FIFOcntf full & empty signals
-assign fifo_wen_o = ~wfull & ~cnt_wf; 
+wire cnt_wf, cnt_re;       // FIFOcntf full & empty signals
 assign dat_rdy_o = ~rempty;
 assign cnt_rdy_o = ~cnt_re;
+
+`ifdef rx_single_frame
+// Double-flop rempty and cnt_re into eth_clk_i domain.
+reg rempty_s1, rempty_s2, cnt_re_s1, cnt_re_s2;
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if (eth_rst_i) begin
+      rempty_s1 <= 1'b1; rempty_s2 <= 1'b1;
+      cnt_re_s1 <= 1'b1; cnt_re_s2 <= 1'b1;
+   end else begin
+      rempty_s1 <= rempty;   rempty_s2 <= rempty_s1;
+      cnt_re_s1 <= cnt_re;   cnt_re_s2 <= cnt_re_s1;
+   end
+end
+wire drained_sync = rempty_s2 & cnt_re_s2;   // both FIFOs confirmed fully consumed
+
+// *** NEW: rx_hold — stop accepting frames until driver has drained both FIFOs ***
+reg rx_hold;
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if (eth_rst_i)
+      rx_hold <= 1'b0;
+   else if (eth_cnt_op)        // frame's descriptor entry just landed successfully
+      rx_hold <= 1'b1;
+   else if (drained_sync)      // driver has fully read out the previous frame
+      rx_hold <= 1'b0;
+end
+assign fifo_wen_o = ~wfull & ~cnt_wf & ~rx_hold;
+`else
+assign fifo_wen_o = ~wfull & ~cnt_wf;
+`endif
+
 
 wire dma_inca, eth_we, eth_cnt_op;
 assign dma_inca = dma_inca_i & dma_stb_i & ~rempty;   // DMA increment address signal
 assign eth_cnt_op = eth_cwe_i & ~cnt_wf;              // FIFOcntf write enable 
 assign eth_we = eth_dwe_i & ~wfull;                   // FIFO write enable
 wire cnt_rrq = bus_read_req & (wb_adr_i[1:0] == 2'b10) & ~cnt_re;
+//wire cnt_rrq = bus_read & (wb_adr_i[1:0] == 2'b10) & ~cnt_re;
 
 // *** Read from FIFO ***
 // WB read enable generation (1 clock duration)
 reg pre_read;
 always @(posedge wb_clk_i)
- pre_read <= bus_read_req;
+   pre_read <= bus_read_req;
 wire bus_read = ~pre_read & bus_read_req;
 
 // FIFO read enable signal
 wire r_en = ((wb_adr_i[1:0] == 2'b00) & bus_read) |
             (~bus_read_req & dma_inca);
 
-always @(posedge wb_clk_i, posedge wb_rst_i)  begin
+always @(posedge wb_clk_i, posedge wb_rst_i) begin
    if (wb_rst_i) begin
-      rptr_bin  <= 12'b0;
-      rptr_gray <= 12'b0;
-   end
-   else begin
-      if(bus_write_req & (wb_adr_i[1:0] == 2'b01))
-         rptr_bin <= wb_dat_i[11:0];
-      else
-         rptr_bin  <= rptr_bin_next;
-      rptr_gray <= rptr_gray_next;      
+      rptr_bin  <= 13'b0;
+      rptr_gray <= 13'b0;
+   end else begin
+      rptr_bin  <= rptr_bin_next;
+      rptr_gray <= rptr_gray_next;
    end
 end
 
@@ -304,7 +344,7 @@ always @(posedge wb_clk_i, posedge wb_rst_i)  begin
             2'b00:
                data <= buf_data;
             2'b01:
-               data <= {4'b0, rptr_bin};
+               data <= {3'b0, rptr_bin};
             2'b10:
                data <= cnt_data;
             default:
@@ -315,17 +355,24 @@ always @(posedge wb_clk_i, posedge wb_rst_i)  begin
 end
 // ******************************
 
-// *** Write to FIFO ***
+// *** FIFO prev. address ***
 always @(posedge eth_clk_i, posedge eth_rst_i)  begin
    if (eth_rst_i) begin
-      wptr_bin  <= 12'b0;
-      wptr_gray <= 12'b0;
+      wptr_bin_pre <= 13'b0;
    end
    else begin
-      if(eth_cnt_op && (~eth_ncsr_i))
-         wptr_bin <= wptr_bin - 2'b10; // minus 4 byte of CRC
-      else
-         wptr_bin  <= wptr_bin_next;
+      if(eth_cnt_op)
+         wptr_bin_pre <= wptr_bin;
+   end
+end
+
+// *** Write to FIFO ***
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if (eth_rst_i) begin
+      wptr_bin  <= 13'b0;
+      wptr_gray <= 13'b0;
+   end else begin
+      wptr_bin  <= wptr_bin_next;
       wptr_gray <= wptr_gray_next;
    end
 end
@@ -344,7 +391,7 @@ buf2kw bufrx(
 
 // FIFOcntf - To store number of received data bytes & flags
 async_fifo #(16, 5) cntrf(
-	.wclk(eth_clk_i),
+   .wclk(eth_clk_i),
    .wrst(eth_rst_i),
    .w_en(eth_cnt_op),
    .wdata(eth_cnt_i),
