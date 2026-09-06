@@ -46,12 +46,6 @@ localparam TXDELAY	= 3'd4;
 localparam WAITDONE	= 3'd5;
 reg  [2:0]  tx_state;
 
-// Инициализация
-initial
-   begin
-      tx_state <= IDLE;
-   end
-
 // Основной блок
 always@(negedge clk_i, posedge rst_i) begin
    if(rst_i) tx_state <= IDLE;
@@ -133,6 +127,7 @@ always@(negedge clk_i, posedge rst_i) begin
                      else begin
                         txer <= 1'b1;           // FIFO опустошено раньше времени - ошибка, ...
                         txinca <= 1'b0;         // ... сброс сигнала инкремента адреса, ...
+                        i <= 11'h0;
                         if(nocrc_i) begin
                            tx_state <= TXDELAY; // На завершение
                            crcen <= 1'b0;
@@ -147,23 +142,10 @@ always@(negedge clk_i, posedge rst_i) begin
          SENDCRC: begin		// Передача контрольной сумм (CRC)
             crcen <= 1'b0;
             case(bc)
-               2'o0: begin
-                  dataout[7:0] <= {~crc_i[24],~crc_i[25],~crc_i[26],~crc_i[27],~crc_i[28],~crc_i[29],~crc_i[30],~crc_i[31]};
-                  bc <= bc + 1'b1;
-               end
-               2'o1: begin
-                  dataout[7:0] <= {~crc_i[16],~crc_i[17],~crc_i[18],~crc_i[19],~crc_i[20],~crc_i[21],~crc_i[22],~crc_i[23]};
-                  bc <= bc + 1'b1;
-               end
-               2'o2: begin
-                  dataout[7:0] <= {~crc_i[8],~crc_i[9],~crc_i[10],~crc_i[11],~crc_i[12],~crc_i[13],~crc_i[14],~crc_i[15]};
-                  bc <= bc + 1'b1;
-               end
-               2'o3: begin
-                  dataout[7:0] <= {~crc_i[0],~crc_i[1],~crc_i[2],~crc_i[3],~crc_i[4],~crc_i[5],~crc_i[6],~crc_i[7]};
-                  bc <= bc + 1'b1;
-                  tx_state <= TXDELAY;
-               end
+               2'o0: begin dataout <= revbyte(crc_i[31:24]); bc <= bc + 1'b1; end
+               2'o1: begin dataout <= revbyte(crc_i[23:16]); bc <= bc + 1'b1; end
+               2'o2: begin dataout <= revbyte(crc_i[15:8]);  bc <= bc + 1'b1; end
+               2'o3: begin dataout <= revbyte(crc_i[7:0]);   bc <= bc + 1'b1; tx_state <= TXDELAY; end
             endcase
          end
          TXDELAY: begin		// Задержка 12 байт и установка сигнала завершения передачи
@@ -184,5 +166,14 @@ always@(negedge clk_i, posedge rst_i) begin
       endcase
    end
 end
+
+function [7:0] revbyte;
+   input [7:0] b;
+   integer k;
+   begin
+      for (k = 0; k < 8; k = k + 1)
+         revbyte[k] = ~b[7-k];
+   end
+endfunction
 
 endmodule

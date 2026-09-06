@@ -9,7 +9,7 @@ module ether(
 	input  [10:0]	txcntb_i,	// Счетчик данных передачи (байт)
 	input  [15:0]	etxdbus_i,	// Шина данных блока передачи (память -> ether модуль)
 	input  [9:0]	ethmode_i,	// Режим работы модуля Ethernet
-	output [15:0]	erxdbus_o,	// Шина данных блока приема (ether модуль -> память)
+	output [7:0]	erxdbus_o,	// Шина данных блока приема (ether модуль -> память)
 	output [15:0]	rxfrsts_o,  // Статус принятого кадра (ошибки и кол-во байт)
 	output			erdatwrn_o,	// Сигнал записи данных
    output			ercnfwrn_o,	// Сигнал записи данных флагов
@@ -17,17 +17,18 @@ module ether(
 	output			rxclkb_o,	// Синхросигнал канала приема (запись в буферную память)
    output         txclkb_o,   // Синхросигнал канала передачи (чтение из буферной памяти)
 	output [4:0]	stserrs_o,  // статус и ошибки приема/передачи
-   output         enocsr_o,
+   output         skipcrc_o,  // Пропустить 4 байта CSR
+   output         flashd_o,   // Сигнал очистки текущих данных
 
 	input				e_rxc,		// Синхросигнал канала приема
 	input				e_rxdv,		// Сигнал готовности данных канала приема
 	input				e_rxer,		// Ошибка канала приема
-	input  [7:0]	e_rxd,		// Данные канала приема
+	input  [3:0]	e_rxd,		// Данные канала приема
 	input				e_crs,		// Сигнал наличия несущей
 	input				e_txc,		// Синхросигнал канала передачи
 	output			e_txen,		// Сигнал разрешения передачи
 	output			e_txer,		// Сигнал ошибки канала передачи
-	output [7:0]	e_txd,		// Данные канала передачи
+	output [3:0]	e_txd,		// Данные канала передачи
 	output			e_rst,		// Сброс, активный - низкий
 	output			e_gtxc,		// Опорный синхросигнал для 1Gb
 	inout				e_mdio,		// Блок управления - линия данных
@@ -46,7 +47,7 @@ module ether(
 );
 
 assign e_rst = ~rst_i;
-assign e_gtxc = e_rxc;
+assign e_gtxc = e_rxc;  // Нужно убрать.
 //
 //======================= CRC=======================//
 wire [31:0] crctx;		// CRC канала передачи
@@ -72,7 +73,6 @@ assign stserrs_o = {e_crs, crs_err, tx_errg, rx_errg, txdone};
 
 //================ Синхронизация ====================//
 wire			loop;				// Сигнал работы петли
-//wire			mcast;			// Режим широковещания разрешен (пока не используется)
 wire			txrdyl;			// Сигнал готовности данных передачи
 wire			rx_enable;		// Разрешение приема
 wire        nocrc;         // Не обрабатывать CRC
@@ -82,17 +82,15 @@ synchbe synche(
 	.ethmode_i(ethmode_i),
 	.rx_ena_o(rx_enable),
 	.skipb_o(skipb),
-//	.mcast_o(mcast),
 	.prmstp_o(prmstp_o),
 	.txrdy_o(txrdyl),
    .nocrc_o(nocrc),
 	.loop_o(loop)
 );
-assign enocsr_o = nocrc;
 
 // ===== Gigabit mode - speed=1000 and link=OK ======//
-wire        gbmode;
-assign gbmode	= ((md_sts_o[6:5] == 2'b10) & (md_sts_o[0] == 1'b1))? 1'b1 : 1'b0;
+//wire        gbmode;
+//assign gbmode	= ((md_sts_o[6:5] == 2'b10) & (md_sts_o[0] == 1'b1))? 1'b1 : 1'b0;
 
 //===== Мультиплексор 4->8 входной шины данных ======//
 wire			rxdv;				// Сигнал готовности данных блока приема
@@ -113,9 +111,9 @@ ddin dd_in(
    .rxdv_o(rxdvm),
    .rxer_o(rxerm)
 );
-assign rxclk = gbmode? e_rxc : rxclkm;
-assign rxdb = gbmode? e_rxd : ddinm;                                       // Мультиплексированные данные
-assign {rxdv, rxer} = gbmode? {e_rxdv, e_rxer} : {rxdvm, rxerm | e_rxer};  // Сигналы управления
+assign rxclk = rxclkm;
+assign rxdb = ddinm;
+assign {rxdv, rxer} = {rxdvm, rxerm | e_rxer};  // Сигналы управления
 
 //===== Демультиплексор 8->4 выходной шины данны =====//
 wire [3:0]	ddoutm;			// Выходные данные для 10Mb-100Mb
@@ -135,9 +133,9 @@ ddout dd_out(
    .txen_o(txeno),
    .txerr_o(txero)
 );
-assign txclk = gbmode? e_gtxc : txclkm;							// Синхросигнал канала передачи
-assign e_txd[7:0] = gbmode? txdb[7:0] : {4'o0,ddoutm[3:0]};	// Демультиплексированные данные
-assign {e_txen, e_txer} = loop? {1'b0, 1'b0} : (gbmode? {txens, txers} : {txeno, txero | txers});  // Сигналы управления
+assign txclk = txclkm;							// Синхросигнал канала передачи
+assign e_txd[3:0] = ddoutm[3:0];       	// Демультиплексированные данные
+assign {e_txen, e_txer} = loop? {1'b0, 1'b0} : {txeno, txero | txers};  // Сигналы управления
 assign tx_errg = loop? 1'b0 : (e_txer | ~md_sts_o[0]);
 
 //======== Обработка данных канала передачи ========//
@@ -185,10 +183,13 @@ ethreceive ethrcvm(
    .rxdv_i(rxdvl),
    .rxer_i(rxerl),
    .nocrc_i(nocrc),
+   .loop_i(loop),
    .rxfrsts_o(rxfrsts_o),
    .data_o(erxdbus_o),
    .datwe_o(erdatwrn_o),
    .cnfwe_o(ercnfwrn_o),
+   .skpcrc_o(skipcrc_o),
+   .flashd_o(flashd_o),
    .crc_i(crcrx),
    .crcen_o(crcenrx),
    .crcre_o(crcrerx),
@@ -218,7 +219,7 @@ crc_n crc_rx(
 
 //================ Блок управления =================//
 mdint mdintm(
-   .clk_i(md_clk_i),
+   .mdc_i(md_clk_i),
    .rst_i(rst_i),
    .evt_i(md_evt_i),
    .mdiol(e_mdio),

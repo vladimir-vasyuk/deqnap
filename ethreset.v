@@ -11,13 +11,9 @@ module ethreset(
 );
 
 reg [19:0]  to;
-reg         reset;
+reg         reset = 1'b0;
 wire        start;
 assign e_reset_o = reset;
-
-initial begin
-   reset <= 1'b0;
-end
 
 // Формирование сигнала старта по переднему фронту
 reg prev_sig;
@@ -28,7 +24,7 @@ assign start = ~prev_sig & rst_i;
 // Формирование сигнала сброса
 always @(posedge clk_i) begin
    if(start) reset <= 1'b1;
-   else if(to[19] & to[17]) reset <= 1'b0;
+   else if(to[19]) reset <= 1'b0;
 end
 
 // Счет с обнудением
@@ -45,9 +41,9 @@ endmodule
 // сигналу сброса тактового домена шины.
 //
 // SDC constraint
-//       set_false_path -from [get_registers {*rst_sync_eth*eth_rst[0]*}] \
+//set_false_path -from [get_registers {*rst_sync_eth*eth_rst[1]*}] \
 //               -to   [get_registers {*rst_sync_eth*rst_sig*}]
-//       set_false_path -from [get_registers {*rst_sync_eth*rst_sig*}] \
+//set_false_path -from [get_registers {*rst_sync_eth*rst_sig*}] \
 //               -to   [get_registers {*rst_sync_eth*eth_rst*}]
 // =============================================================================
  
