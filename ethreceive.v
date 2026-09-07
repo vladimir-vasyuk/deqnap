@@ -192,8 +192,14 @@ always@(negedge clk_i, posedge rst_i) begin
                if(cmpres_i)
                   rx_state <= FINISH;                    // ... переход к завершению
                else begin
-                  flashd_o <= 1'b1;
-                  rx_state <= IDLE;
+                  if(loop_i) begin
+                     runt_err <= 1'b1;
+                     rx_state <= FINISH;
+                  end
+                  else begin
+                     flashd_o <= 1'b1;
+                     rx_state <= IDLE;
+                  end
                end
 				end
 				else begin                                   // Ждем сигнал завершения проверки
