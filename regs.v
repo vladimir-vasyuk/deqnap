@@ -527,8 +527,7 @@ always @(posedge lwb_clk_i) begin
          if(lwb_sel_i[1]) begin    // Запись старшего байта
             case (lwb_adr_i[2:0])
                3'b111:        // Base + 16 - CSR
-//                  csr_ri <= lwb_dat_i[15];
-                  csr_ri <= 1'b1;
+                  csr_ri <= lwb_dat_i[15];
             endcase
          end
       end
