@@ -4,7 +4,7 @@
 //=================================================================================
 
 //`define md_debug         // Отладка MD
-`define rx_single_frame  //  Прием по одному кадру
+//`define rx_single_frame  //  Прием по одному кадру
 
 module deqnap(
    input          wb_clkp_i,  // тактовая частота шины		wb_clk
@@ -139,12 +139,13 @@ wire [15:0]	ldibus;        // Шины входных данных
 assign ldibus = (dma_bdl ? bdl_dat : 16'o000000)
 				  | (dma_rxb ? mrxdat  : 16'o000000);
 
-// Мультиплексор сигналов ошибка данных
+// Мультиплексор сигналов ошибки данных
 wire        dma_rerr;      // Ошибка данных операции чтения
 wire        dma_werr;      // Ошибка данных операции записи
-assign dma_rerr = (dma_rxb ? ~rx_dat_rdy : 1'b0);
-//assign dma_rerr = 1'b0;
-assign dma_werr = (dma_txb ? ~txfifo_wena : 1'b0);
+wire        bdrom;         // Режим чтения BDROM
+assign bdrom = emode[9];
+assign dma_rerr = (dma_rxb & ~bdrom)? ~rx_dat_rdy : 1'b0;
+assign dma_werr = dma_txb ? ~txfifo_wena : 1'b0;
 
 // Сигнал записи по каналу ПДП/DMA
 wire			ldma_we = dma_ack_i & dma_gnt & ~dma_we_o;
