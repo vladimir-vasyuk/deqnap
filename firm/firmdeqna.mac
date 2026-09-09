@@ -196,11 +196,13 @@ RS.2BL	= 377	; low order 8 bits of receive...
 ; Bits defined for DMAOP
 DM.RDY	= BT.07	; Operation is completed
 DM.NXM	= BT.06	; NMX error
+DM.WRO	= BT.01	; DMA write operation
+DM.RDO	= BT.00	; DMA read operation
+;---------------------------------------------------------------------------
+; Values defined for DMALDM
 RX.BFS	= 1	; Select receive buffer
 TX.BFS	= 2	; Select transmit buffer
 BD.BFS	= 3	; Select BDL
-DM.WRO	= BT.01	; DMA write operation
-DM.RDO	= BT.00	; DMA read operation
 ;---------------------------------------------------------------------------
 ; Bits defined for various errors
 PH.ERR	= BT.04	; Phy error
@@ -381,8 +383,7 @@ MLOOP:	BIT	#CS.XL, @R3	; Check XL-bit
 	.SBTTL	- Transmit operation
 ;===========================================================================
 ;
-TXP:
-	MOV	@#LQATLL, TBDLL	; Get initial Tx BDL low order address bits
+TXP:	MOV	@#LQATLL, TBDLL	; Get initial Tx BDL low order address bits
 	MOV	@#LQATLH, TBDLH	; Get initial Tx BDL high order address bits
 ;-----------------------------------------------
 ; Init status word templates
@@ -712,7 +713,10 @@ RXF$:	RETURN
 ; 3. Read block 1K words from ROM to TX buffer.
 ; 4. Transfer.
 ;
-PBDROM:	MOV	R2, -(SP)
+PBDROM:	BIT	#CS.RL, @R3	; Check RL-bit
+	BEQ	1$		; RL=0 - continue
+	JMP	PBDEX$		; RL=1 - exit
+1$:	MOV	R2, -(SP)
 	CALL	SNTRES		; Reset sanity timer
 ;-----------------------------------------------
 ; Rewrite from ROM to TX buffer
@@ -727,28 +731,28 @@ PBDROM:	MOV	R2, -(SP)
 ; Rewrite first part of BD ROM to TX buffer
 	MOV	R2, @#ECNTB	; Store byte count in the register.
 	ASR	R0		; Divided by 2
-1$:	MOV	(R4)+, @R5	; Rewrite first part of BD ROM data
-	SOB	R0, 1$		; to TX buffer
+2$:	MOV	(R4)+, @R5	; Rewrite first part of BD ROM data
+	SOB	R0, 2$		; to TX buffer
 ;-----------------------------------------------
 ; Transmit data
 	MOV	#ECTST, R0
 	BIS	#ET.TRD,@R0	; Set "ready-to-transmit" bit
-2$:	BIT	#<ET.TXD!ER.TXR>,@R0 ; Transmitted or error?
-	BEQ	2$		; Not yet, loop
+3$:	BIT	#<ET.TXD!ER.TXR>,@R0 ; Transmitted or error?
+	BEQ	3$		; Not yet, loop
 	BIC	#ET.TRD, @R0	; Clear "ready-to-transmit" bit
 ;-----------------------------------------------
 ; Rewrite second part of BD ROM to TX buffer
 	MOV	BCOUNT, R0
 	MOV	R2, @#ECNTB	; Store byte count in the register.
 	ASR	R0		; Divided by 2
-3$:	MOV	(R4)+, @R5	; Rewrite second part of BD ROM data
-	SOB	R0, 3$		; to TX buffer
+4$:	MOV	(R4)+, @R5	; Rewrite second part of BD ROM data
+	SOB	R0, 4$		; to TX buffer
 ;-----------------------------------------------
 ; Transmit data
 	MOV	#ECTST, R0
 	BIS	#ET.TRD,@R0	; Set "ready-to-transmit" bit
-4$:	BIT	#<ET.TXD!ER.TXR>,@R0 ; Transmitted or error?
-	BEQ	4$		; Not yet, loop
+5$:	BIT	#<ET.TXD!ER.TXR>,@R0 ; Transmitted or error?
+	BEQ	5$		; Not yet, loop
 	BIC	#ET.TRD, @R0	; Clear "ready-to-transmit" bit
 ;-----------------------------------------------
 ; BD ROM is in Rx FIFO now
