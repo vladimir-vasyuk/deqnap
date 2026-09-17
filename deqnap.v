@@ -76,7 +76,7 @@ assign deqna_led_o = indic;
 //*******************************************************************
 //* Буферная память канала приема
 wire        rxfifo_wena, rx_dat_rdy, rx_cnt_rdy;
-rxbuf mrxbuf(
+rxbuf #(0) mrxbuf (
 	.wb_clk_i(lwb_clkp),
    .wb_rst_i(comb_res),
    .wb_adr_i(lwb_adr[2:1]),
@@ -114,6 +114,7 @@ txbuf mtxbuf(
 //	.wb_dat_o(ltxb_dat),
 	.wb_cyc_i(lwb_cyc),
 	.wb_we_i(lwb_we),
+   .wb_sel_i(lwb_sel),
 	.wb_stb_i(ltxb_stb),
 	.wb_ack_o(ltxb_ack),
 	.dma_stb_i(dma_txb),
@@ -434,7 +435,7 @@ bdl bdlm(
 	.wb_dat_i(lwb_out),
 	.wb_cyc_i(lwb_cyc),
 	.wb_we_i(lwb_we),
-//	.wb_sel_i(lwb_sel),
+	.wb_sel_i(lwb_sel),
 	.wb_stb_i(lbdl_stb),
 	.wb_ack_o(lbdl_ack),
 	.dma_stb_i(dma_bdl),
@@ -472,7 +473,6 @@ extregs eregs(
                               // 0 - sanity timer is enabled
    .let_stb_i(leth_stb),
 	.e_txcntb_o(txcntb),
-//	.e_rxcntb_i(rxcntb),
 	.e_mode_o(emode),
 	.e_stse_i(estse),
 	.e_mdval_o(md_val_w),
