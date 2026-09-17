@@ -29,7 +29,88 @@ endmodule
 
 //=================================================================================
 // BDL module
+//
+// Read: 
+//    BA ... BA+010     - memory value 
+// Write:
+//    BA+016            - address value
 //=================================================================================
+module bdl(
+// Internal bus
+   input          wb_clk_i,   // Bus clock signal
+   input          wb_rst_i,   // Reset
+   input  [2:0]   wb_adr_i,   // Address
+   input  [15:0]  wb_dat_i,   // Input data
+   input          wb_cyc_i,   // Bus cycle start
+   input          wb_we_i,    // Write enable (0 = read)
+   input  [1:0]   wb_sel_i,   // Byte select for write
+   input          wb_stb_i,   // Bus cycle strobe
+   output         wb_ack_o,   // Device select acknowledge
+// DMA bus
+   input          dma_inca_i, // DMA address increment
+   input  [15:0]  dma_dat_i,  // Input data
+   input          dma_we_i,   // Write enable (0 = read)
+   input          dma_stb_i,  // Strobe
+// Common data output
+	output [15:0]	bdl_dat_o
+);
+
+// Bus exchange control signals
+wire			bus_strobe, bus_write_req; //bus_read_req;
+assign bus_strobe = wb_cyc_i & wb_stb_i;           // Bus cycle strobe
+assign bus_write_req = bus_strobe & wb_we_i;       // Write request
+
+// Acknowledge signal generation
+reg			ack;
+always @(posedge wb_clk_i)
+   if (wb_stb_i & wb_cyc_i)
+		ack <= 1'b1;
+   else
+		ack <= 1'b0;
+assign wb_ack_o = ack & wb_stb_i;
+
+wire [15:0]	bdldin;			// BDL input data
+wire [15:0]	bdldout;			// BDL output data
+wire [15:0] wbdata;
+wire [2:0]	bdladr;			// BDL address
+wire			bdlwe;			// BDL write signal
+reg  [2:0]  dma_adr;
+assign wbdata[15:8] = (bus_write_req & wb_sel_i[1])? wb_dat_i[15:8] : 8'b0;
+assign wbdata[7:0] = (bus_write_req & wb_sel_i[0])? wb_dat_i[7:0] : 8'b0;
+assign bdlwe = dma_stb_i? dma_we_i : (bus_strobe? wb_we_i : 1'b0);
+assign bdladr = dma_stb_i? dma_adr : (bus_strobe? wb_adr_i : 3'b0);
+assign bdldin = dma_stb_i? dma_dat_i : wbdata;
+assign bdl_dat_o = bdldout;
+
+always @(posedge wb_clk_i, posedge wb_rst_i)  begin
+   if(wb_rst_i) begin
+      dma_adr <= 3'b0;
+   end
+   else  begin
+		if(bus_write_req) begin
+         if(wb_sel_i[0] == 1'b1) begin 
+            case (wb_adr_i[2:0])
+               3'b111: // 24016
+                  dma_adr <= wb_dat_i[2:0];
+               default: ; // other addresses are not used
+            endcase
+         end
+      end
+      else if(dma_inca_i & dma_stb_i) begin
+         dma_adr <= dma_adr + 1'b1;
+      end
+   end
+end
+
+regf #(.NUM(6)) bdl(
+   .clk_i(wb_clk_i),
+   .addr_i(bdladr),
+   .data_i(bdldin),
+   .we_i(bdlwe),
+   .q_o(bdldout)
+);
+endmodule
+/*
 module bdl(
 // Internal bus
    input          wb_clk_i,   // Bus clock signal
@@ -104,8 +185,7 @@ regf #(.NUM(6)) bdl(
    .q_o(bdldout)
 );
 endmodule
-
-
+*/
 //=================================================================================
 // Модуль ROM
 //=================================================================================
@@ -145,8 +225,13 @@ endmodule
 //    BA+4              - error & flags + byte counter
 // Write:
 //    BA+2              - address value
+//
+//   HOLD_THRESHOLD = 0        -> unlimited (no rx_hold; only wfull/cnt_wf backstops apply)
+//   HOLD_THRESHOLD = 1,2,3... -> allow up to that many committed-but-undrained frames
+//                                before gating fifo_wen_o
 //=================================================================================
-module rxbuf(
+module rxbuf #(parameter HOLD_THRESHOLD = 1)
+(
 // Domain WB
    input          wb_clk_i,   // clock
    input          wb_rst_i,   // reset
@@ -276,7 +361,7 @@ wire cnt_wf, cnt_re;       // FIFOcntf full & empty signals
 assign dat_rdy_o = ~rempty;
 assign cnt_rdy_o = ~cnt_re;
 
-`ifdef rx_single_frame
+// *** Frames limitation part ***
 // Double-flop rempty and cnt_re into eth_clk_i domain.
 reg rempty_s1, rempty_s2, cnt_re_s1, cnt_re_s2;
 always @(posedge eth_clk_i, posedge eth_rst_i) begin
@@ -290,21 +375,28 @@ always @(posedge eth_clk_i, posedge eth_rst_i) begin
 end
 wire drained_sync = rempty_s2 & cnt_re_s2;   // both FIFOs confirmed fully consumed
 
-// *** NEW: rx_hold — stop accepting frames until driver has drained both FIFOs ***
-reg rx_hold;
-always @(posedge eth_clk_i, posedge eth_rst_i) begin
-   if (eth_rst_i)
-      rx_hold <= 1'b0;
-   else if (eth_cnt_op)        // frame's descriptor entry just landed successfully
-      rx_hold <= 1'b1;
-   else if (drained_sync)      // driver has fully read out the previous frame
-      rx_hold <= 1'b0;
-end
-assign fifo_wen_o = ~wfull & ~cnt_wf & ~rx_hold;
-`else
-assign fifo_wen_o = ~wfull & ~cnt_wf;
-`endif
+// Tracks how many frames have committed since the last full drain.
+reg  [3:0] frame_cnt;         // 4 bits: up to 15 in flight, widen if you ever need more
+wire [3:0] frame_cnt_next;
+reg        rx_hold;
 
+assign frame_cnt_next =
+   drained_sync ? (eth_cnt_op ? 4'd1 : 4'd0) :        // fully drained -> 0 (or 1 if a new frame commits this same cycle)
+   (eth_cnt_op  ? (frame_cnt + 4'd1) : frame_cnt);    // otherwise: increment on commit, else hold
+
+always @(posedge eth_clk_i, posedge eth_rst_i) begin
+   if (eth_rst_i) begin
+      frame_cnt <= 4'd0;
+      rx_hold   <= 1'b0;
+   end
+   else begin
+      frame_cnt <= frame_cnt_next;
+      rx_hold   <= (HOLD_THRESHOLD != 0) && (frame_cnt_next >= HOLD_THRESHOLD);
+   end
+end
+
+assign fifo_wen_o = ~wfull & ~cnt_wf & ~rx_hold;
+// ******************************
 
 wire dma_inca, eth_we, eth_cnt_op;
 assign dma_inca = dma_inca_i & dma_stb_i & ~rempty;   // DMA increment address signal
@@ -545,6 +637,7 @@ module txbuf(
 	input				wb_cyc_i,	// cycle signal
 	input				wb_we_i,		// [1]=write, [0]=read
 	input				wb_stb_i,	// strobe  signal
+   input  [1:0]   wb_sel_i,   // byte select for write
 	output			wb_ack_o,	// ack. signal
 // DMA (domain WB)
 	input				dma_stb_i,	// DMA strobe
@@ -576,7 +669,7 @@ assign wb_ack_o = wb_cyc_i & wb_stb_i & ack[1];
 // WB write enable generation (1 clock duration)
 reg pre_write;
 always @(posedge wb_clk_i)
- pre_write <= bus_write_req;
+   pre_write <= bus_write_req;
 wire bus_we = ~pre_write & bus_write_req;
 
 // DMA write enable signal
@@ -584,7 +677,10 @@ wire dma_we = dma_stb_i & dma_we_i;
 
 // Selector DMA/WB
 wire wren = (dma_stb_i ? dma_we : bus_we) & ~wfull;
-wire [15:0] wdata = dma_stb_i ? dma_dat_i : wb_dat_i;
+wire [15:0] wbdata;
+assign wbdata[15:8] = (bus_write_req & wb_sel_i[1]? wb_dat_i[15:8] : 8'b0);
+assign wbdata[7:0] = (bus_write_req & wb_sel_i[0]? wb_dat_i[7:0] : 8'b0);
+wire [15:0] wdata = dma_stb_i ? dma_dat_i : wbdata;
 
 // Write pointer: binary, gray, write address, wfull
 reg  [10:0] wptr_bin,  wptr_gray;
