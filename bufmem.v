@@ -360,50 +360,13 @@ assign dma_dat_o = buf_data;
 wire cnt_wf, cnt_re;       // FIFOcntf full & empty signals
 assign dat_rdy_o = ~rempty;
 assign cnt_rdy_o = ~cnt_re;
-
-// *** Frames limitation part ***
-// Double-flop rempty and cnt_re into eth_clk_i domain.
-reg rempty_s1, rempty_s2, cnt_re_s1, cnt_re_s2;
-always @(posedge eth_clk_i, posedge eth_rst_i) begin
-   if (eth_rst_i) begin
-      rempty_s1 <= 1'b1; rempty_s2 <= 1'b1;
-      cnt_re_s1 <= 1'b1; cnt_re_s2 <= 1'b1;
-   end else begin
-      rempty_s1 <= rempty;   rempty_s2 <= rempty_s1;
-      cnt_re_s1 <= cnt_re;   cnt_re_s2 <= cnt_re_s1;
-   end
-end
-wire drained_sync = rempty_s2 & cnt_re_s2;   // both FIFOs confirmed fully consumed
-
-// Tracks how many frames have committed since the last full drain.
-reg  [3:0] frame_cnt;         // 4 bits: up to 15 in flight, widen if you ever need more
-wire [3:0] frame_cnt_next;
-reg        rx_hold;
-
-assign frame_cnt_next =
-   drained_sync ? (eth_cnt_op ? 4'd1 : 4'd0) :        // fully drained -> 0 (or 1 if a new frame commits this same cycle)
-   (eth_cnt_op  ? (frame_cnt + 4'd1) : frame_cnt);    // otherwise: increment on commit, else hold
-
-always @(posedge eth_clk_i, posedge eth_rst_i) begin
-   if (eth_rst_i) begin
-      frame_cnt <= 4'd0;
-      rx_hold   <= 1'b0;
-   end
-   else begin
-      frame_cnt <= frame_cnt_next;
-      rx_hold   <= (HOLD_THRESHOLD != 0) && (frame_cnt_next >= HOLD_THRESHOLD);
-   end
-end
-
-assign fifo_wen_o = ~wfull & ~cnt_wf & ~rx_hold;
+assign fifo_wen_o = ~wfull & ~cnt_wf;
 // ******************************
 
 wire dma_inca, eth_we, eth_cnt_op;
 assign dma_inca = dma_inca_i & dma_stb_i & ~rempty;   // DMA increment address signal
 assign eth_cnt_op = eth_cwe_i & ~cnt_wf;              // FIFOcntf write enable 
 assign eth_we = eth_dwe_i & ~wfull;                   // FIFO write enable
-wire cnt_rrq = bus_read_req & (wb_adr_i[1:0] == 2'b10) & ~cnt_re;
-//wire cnt_rrq = bus_read & (wb_adr_i[1:0] == 2'b10) & ~cnt_re;
 
 // *** Read from FIFO ***
 // WB read enable generation (1 clock duration)
@@ -411,6 +374,8 @@ reg pre_read;
 always @(posedge wb_clk_i)
    pre_read <= bus_read_req;
 wire bus_read = ~pre_read & bus_read_req;
+//wire cnt_rrq = bus_read_req & (wb_adr_i[1:0] == 2'b10) & ~cnt_re;
+wire cnt_rrq = bus_read & (wb_adr_i[1:0] == 2'b10) & ~cnt_re;
 
 // FIFO read enable signal
 wire r_en = ((wb_adr_i[1:0] == 2'b00) & bus_read) |

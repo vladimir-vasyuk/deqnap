@@ -4,7 +4,6 @@
 //=================================================================================
 
 //`define md_debug         // Отладка MD
-//`define rx_single_frame  //  Прием по одному кадру
 
 module deqnap(
    input          wb_clkp_i,  // тактовая частота шины		wb_clk
@@ -76,7 +75,7 @@ assign deqna_led_o = indic;
 //*******************************************************************
 //* Буферная память канала приема
 wire        rxfifo_wena, rx_dat_rdy, rx_cnt_rdy;
-rxbuf #(0) mrxbuf (
+rxbuf mrxbuf (
 	.wb_clk_i(lwb_clkp),
    .wb_rst_i(comb_res),
    .wb_adr_i(lwb_adr[2:1]),
